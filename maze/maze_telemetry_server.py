@@ -24,7 +24,7 @@ app = Flask(__name__)
 # MongoDB configuration
 # ------------------------------------------------------------
 
-MONGO_URI = "mongodb://localhost:27017/"
+MONGO_URI = "mongodb://10.255.255.254:27017/"
 MONGO_DB_NAME = "maze_telemetry"
 MONGO_COLLECTION = "maze_input_data"
 
