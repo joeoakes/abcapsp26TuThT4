@@ -10,64 +10,49 @@
 #include <time.h>
 #include <string.h>
 
-#include <curl/curl.h>   // Used for HTTP communication
-#include <cjson/cJSON.h> // Used for building JSON safely
+#include <curl/curl.h>
+#include <cjson/cJSON.h>
 
 #define MAZE_W 21
 #define MAZE_H 15
 #define CELL   32
 #define PAD    16
 
-// Local HTTP endpoint where events are sent
 #define EVENT_ENDPOINT "http://localhost:8080/events"
 
-// Wall bitmask for each cell
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
-// Structure representing a single maze cell
 typedef struct {
   uint8_t walls;
   bool visited;
 } Cell;
 
-// The maze grid
 static Cell g[MAZE_H][MAZE_W];
 
-// Unique session identifier (generated once per run)
 static char session_id[37];
-
-// Counts total player moves
 static int move_sequence = 0;
 
 /* -------------------------------------------------------
-   Utility Functions
-   ------------------------------------------------------- */
+   Utility helpers
+------------------------------------------------------- */
 
-// Check if coordinates are inside the maze bounds
 static inline bool in_bounds(int x, int y) {
   return (x >= 0 && x < MAZE_W && y >= 0 && y < MAZE_H);
 }
 
-// Generate a simple UUID-like string for session_id
-// NOTE: This is NOT cryptographically secure, but is fine for logging/demo
 static void generate_session_id(char *out) {
   const char *hex = "0123456789abcdef";
-  int i, p = 0;
+  int p = 0;
 
-  srand((unsigned)time(NULL));
-
-  for (i = 0; i < 36; i++) {
-    if (i == 8 || i == 13 || i == 18 || i == 23) {
+  for (int i = 0; i < 36; i++) {
+    if (i == 8 || i == 13 || i == 18 || i == 23)
       out[p++] = '-';
-    } else {
+    else
       out[p++] = hex[rand() % 16];
-    }
   }
   out[p] = '\0';
 }
 
-// Create a UTC timestamp in ISO-8601 format
-// Example: 2026-01-25T11:44:03Z
 static void get_utc_timestamp(char *buf, size_t size) {
   time_t now = time(NULL);
   struct tm *utc = gmtime(&now);
@@ -75,84 +60,64 @@ static void get_utc_timestamp(char *buf, size_t size) {
 }
 
 /* -------------------------------------------------------
-   HTTP + JSON Reporting
-   ------------------------------------------------------- */
+   JSON + HTTP event sender
+------------------------------------------------------- */
 
-// Send a JSON payload to the local HTTP service
 static void send_event_json(
   const char *event_type,
   int px,
   int py,
   bool goal_reached
 ) {
-  // Create the root JSON object
   cJSON *root = cJSON_CreateObject();
 
-  // Timestamp buffer
   char timestamp[32];
   get_utc_timestamp(timestamp, sizeof(timestamp));
 
-  // Add top-level JSON fields
   cJSON_AddStringToObject(root, "session_id", session_id);
   cJSON_AddStringToObject(root, "event_type", event_type);
   cJSON_AddBoolToObject(root, "goal_reached", goal_reached);
   cJSON_AddStringToObject(root, "timestamp", timestamp);
 
-  // Create "input" object
   cJSON *input = cJSON_AddObjectToObject(root, "input");
   cJSON_AddStringToObject(input, "device", "keyboard");
   cJSON_AddNumberToObject(input, "move_sequence", move_sequence);
 
-  // Create "player" object
   cJSON *player = cJSON_AddObjectToObject(root, "player");
   cJSON *position = cJSON_AddObjectToObject(player, "position");
   cJSON_AddNumberToObject(position, "x", px);
   cJSON_AddNumberToObject(position, "y", py);
 
-  // Convert JSON object to formatted string
   char *json_str = cJSON_Print(root);
-
-  // Print JSON payload to console for verification
   printf("\n--- JSON Payload ---\n%s\n", json_str);
 
-  // Initialize libcurl
   CURL *curl = curl_easy_init();
   if (curl) {
     struct curl_slist *headers = NULL;
-
-    // Tell server we're sending JSON
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    // Configure curl options
     curl_easy_setopt(curl, CURLOPT_URL, EVENT_ENDPOINT);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str);
 
-    // Perform HTTP request
     CURLcode res = curl_easy_perform(curl);
-
-    // Check if request succeeded
-    if (res == CURLE_OK) {
+    if (res == CURLE_OK)
       printf("HTTP POST successful ✔\n");
-    } else {
+    else
       printf("HTTP POST failed ✘: %s\n", curl_easy_strerror(res));
-    }
 
-    // Cleanup curl
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
   }
 
-  // Free allocated memory
   free(json_str);
   cJSON_Delete(root);
 }
 
 /* -------------------------------------------------------
-   Maze Generation Logic (unchanged)
-   ------------------------------------------------------- */
+   Maze generation
+------------------------------------------------------- */
 
-// Remove wall between two adjacent cells
 static void knock_down(int x, int y, int nx, int ny) {
   if (nx == x && ny == y - 1) {
     g[y][x].walls &= ~WALL_N;
@@ -169,17 +134,14 @@ static void knock_down(int x, int y, int nx, int ny) {
   }
 }
 
-// Initialize maze with all walls intact
 static void maze_init(void) {
-  for (int y = 0; y < MAZE_H; y++) {
+  for (int y = 0; y < MAZE_H; y++)
     for (int x = 0; x < MAZE_W; x++) {
       g[y][x].walls = WALL_N | WALL_E | WALL_S | WALL_W;
       g[y][x].visited = false;
     }
-  }
 }
 
-// Generate maze using DFS backtracker
 static void maze_generate(int sx, int sy) {
   typedef struct { int x, y; } P;
   P stack[MAZE_W * MAZE_H];
@@ -195,14 +157,13 @@ static void maze_generate(int sx, int sy) {
     P neigh[4];
     int ncount = 0;
 
-    const int dx[4] = { 0, 1, 0, -1 };
-    const int dy[4] = { -1, 0, 1, 0 };
+    const int dx[4] = {0, 1, 0, -1};
+    const int dy[4] = {-1, 0, 1, 0};
 
     for (int i = 0; i < 4; i++) {
       int nx = x + dx[i], ny = y + dy[i];
-      if (in_bounds(nx, ny) && !g[ny][nx].visited) {
+      if (in_bounds(nx, ny) && !g[ny][nx].visited)
         neigh[ncount++] = (P){nx, ny};
-      }
     }
 
     if (ncount == 0) {
@@ -224,8 +185,60 @@ static void maze_generate(int sx, int sy) {
 }
 
 /* -------------------------------------------------------
-   Player Movement
-   ------------------------------------------------------- */
+   Rendering
+------------------------------------------------------- */
+
+static void draw_maze(SDL_Renderer *r) {
+  SDL_SetRenderDrawColor(r, 15, 15, 18, 255);
+  SDL_RenderClear(r);
+
+  SDL_SetRenderDrawColor(r, 230, 230, 230, 255);
+
+  int ox = PAD, oy = PAD;
+
+  for (int y = 0; y < MAZE_H; y++)
+    for (int x = 0; x < MAZE_W; x++) {
+      int x0 = ox + x * CELL;
+      int y0 = oy + y * CELL;
+      int x1 = x0 + CELL;
+      int y1 = y0 + CELL;
+
+      uint8_t w = g[y][x].walls;
+
+      if (w & WALL_N) SDL_RenderDrawLine(r, x0, y0, x1, y0);
+      if (w & WALL_E) SDL_RenderDrawLine(r, x1, y0, x1, y1);
+      if (w & WALL_S) SDL_RenderDrawLine(r, x0, y1, x1, y1);
+      if (w & WALL_W) SDL_RenderDrawLine(r, x0, y0, x0, y1);
+    }
+}
+
+static void draw_player_goal(SDL_Renderer *r, int px, int py) {
+  int ox = PAD, oy = PAD;
+
+  SDL_Rect goal = {
+    ox + (MAZE_W - 1) * CELL + 6,
+    oy + (MAZE_H - 1) * CELL + 6,
+    CELL - 12,
+    CELL - 12
+  };
+
+  SDL_SetRenderDrawColor(r, 40, 160, 70, 255);
+  SDL_RenderFillRect(r, &goal);
+
+  SDL_Rect p = {
+    ox + px * CELL + 8,
+    oy + py * CELL + 8,
+    CELL - 16,
+    CELL - 16
+  };
+
+  SDL_SetRenderDrawColor(r, 213, 189, 64, 255);
+  SDL_RenderFillRect(r, &p);
+}
+
+/* -------------------------------------------------------
+   Movement + reset
+------------------------------------------------------- */
 
 static bool try_move(int *px, int *py, int dx, int dy) {
   int x = *px, y = *py;
@@ -234,7 +247,6 @@ static bool try_move(int *px, int *py, int dx, int dy) {
   if (!in_bounds(nx, ny)) return false;
 
   uint8_t w = g[y][x].walls;
-
   if (dx == 0 && dy == -1 && (w & WALL_N)) return false;
   if (dx == 1 && dy == 0  && (w & WALL_E)) return false;
   if (dx == 0 && dy == 1  && (w & WALL_S)) return false;
@@ -242,58 +254,38 @@ static bool try_move(int *px, int *py, int dx, int dy) {
 
   *px = nx;
   *py = ny;
-
-  // Count the move
   move_sequence++;
 
-  // Send player_move event
   send_event_json("player_move", *px, *py, false);
-
   return true;
 }
-
-/* -------------------------------------------------------
-   Game Reset
-   ------------------------------------------------------- */
 
 static void regenerate(int *px, int *py, SDL_Window *win) {
   maze_init();
   maze_generate(0, 0);
-
   *px = 0;
   *py = 0;
   move_sequence = 0;
 
   SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal");
-
-  // Send maze_reset event
   send_event_json("maze_reset", *px, *py, false);
 }
 
 /* -------------------------------------------------------
-   Main Program
-   ------------------------------------------------------- */
+   Main loop
+------------------------------------------------------- */
 
-int main(int argc, char **argv) {
-  (void)argc;
-  (void)argv;
-
-  // Generate session ID once
+int main(void) {
+  srand((unsigned)time(NULL));
   generate_session_id(session_id);
 
-  // Initialize SDL
-  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
-    fprintf(stderr, "SDL_Init failed\n");
-    return 1;
-  }
-
-  int win_w = PAD * 2 + MAZE_W * CELL;
-  int win_h = PAD * 2 + MAZE_H * CELL;
+  SDL_Init(SDL_INIT_VIDEO);
 
   SDL_Window *win = SDL_CreateWindow(
     "SDL2 Maze",
     SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-    win_w, win_h,
+    PAD * 2 + MAZE_W * CELL,
+    PAD * 2 + MAZE_H * CELL,
     SDL_WINDOW_SHOWN
   );
 
@@ -311,34 +303,30 @@ int main(int argc, char **argv) {
       if (e.type == SDL_QUIT) running = false;
 
       if (e.type == SDL_KEYDOWN) {
-        SDL_Keycode k = e.key.keysym.sym;
-
-        if (k == SDLK_ESCAPE) running = false;
-
-        if (k == SDLK_r) {
+        if (e.key.keysym.sym == SDLK_ESCAPE) running = false;
+        if (e.key.keysym.sym == SDLK_r) {
           won = false;
           regenerate(&px, &py, win);
         }
 
         if (!won) {
-          if (k == SDLK_UP || k == SDLK_w)    try_move(&px, &py, 0, -1);
-          if (k == SDLK_RIGHT || k == SDLK_d) try_move(&px, &py, 1, 0);
-          if (k == SDLK_DOWN || k == SDLK_s)  try_move(&px, &py, 0, 1);
-          if (k == SDLK_LEFT || k == SDLK_a)  try_move(&px, &py, -1, 0);
+          try_move(&px, &py,
+            (e.key.keysym.sym == SDLK_RIGHT) - (e.key.keysym.sym == SDLK_LEFT),
+            (e.key.keysym.sym == SDLK_DOWN)  - (e.key.keysym.sym == SDLK_UP)
+          );
 
           if (px == MAZE_W - 1 && py == MAZE_H - 1) {
             won = true;
             SDL_SetWindowTitle(win, "You win!");
-
-            // Send player_won event
             send_event_json("player_won", px, py, true);
           }
         }
       }
     }
 
-    SDL_SetRenderDrawColor(r, 20, 20, 25, 255);
-    SDL_RenderClear(r);
+    // ✅ CORRECT RENDER ORDER
+    draw_maze(r);
+    draw_player_goal(r, px, py);
     SDL_RenderPresent(r);
   }
 
