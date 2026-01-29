@@ -18,7 +18,7 @@
 #define CELL   32
 #define PAD    16
 
-#define EVENT_ENDPOINT "http://localhost:8080/events"
+#define EVENT_ENDPOINT "http://localhost:8080/move"
 
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
