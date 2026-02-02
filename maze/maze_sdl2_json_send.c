@@ -1,6 +1,6 @@
 // maze_sdl2.c
-// SDL2 maze game with JSON event reporting via HTTP
-// Uses cJSON for JSON creation and libcurl for HTTP POST requests
+// SDL2 maze game with JSON event reporting via HTTPS
+// Uses cJSON for JSON creation and libcurl for HTTPS POST requests
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
@@ -18,7 +18,7 @@
 #define CELL   32
 #define PAD    16
 
-#define EVENT_ENDPOINT "http://localhost:8080/move"
+#define EVENT_ENDPOINT "https://localhost:8443/move" // changed endpoint to use HTTPS
 
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
@@ -99,12 +99,16 @@ static void send_event_json(
     curl_easy_setopt(curl, CURLOPT_URL, EVENT_ENDPOINT);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str);
+    
+    // Disable SSL verification for self-signed certificates (development only) - HTTPS folder -> README.md for more details
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
 
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK)
-      printf("HTTP POST successful ✔\n");
+      printf("\nHTTPS POST successful ✔\n");
     else
-      printf("HTTP POST failed ✘: %s\n", curl_easy_strerror(res));
+      printf("\nHTTPS POST failed ✘: %s\n", curl_easy_strerror(res));
 
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
