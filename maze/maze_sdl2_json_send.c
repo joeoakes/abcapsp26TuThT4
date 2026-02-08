@@ -1,6 +1,7 @@
 // maze_sdl2.c
 // SDL2 maze game with JSON event reporting via HTTPS
 // Uses cJSON for JSON creation and libcurl for HTTPS POST requests
+// Writes mission data to Redis and launches mission dashboard on L key
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
@@ -9,9 +10,12 @@
 #include <stdlib.h>
 #include <time.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
+#include <hiredis/hiredis.h>
 
 #define MAZE_W 21
 #define MAZE_H 15
@@ -31,6 +35,14 @@ static Cell g[MAZE_H][MAZE_W];
 
 static char session_id[37];
 static int move_sequence = 0;
+
+/* Mission tracking for Redis */
+static int moves_left_turn  = 0;
+static int moves_right_turn = 0;
+static int moves_straight   = 0;
+static int moves_reverse    = 0;
+static time_t mission_start_time;
+static redisContext *redis_ctx = NULL;
 
 /* -------------------------------------------------------
    Utility helpers
@@ -60,7 +72,74 @@ static void get_utc_timestamp(char *buf, size_t size) {
 }
 
 /* -------------------------------------------------------
-   JSON + HTTP event sender
+   Redis mission data
+------------------------------------------------------- */
+
+static void redis_connect(void) {
+  struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+  redis_ctx = redisConnectWithTimeout("127.0.0.1", 6379, tv);
+  if (!redis_ctx || redis_ctx->err) {
+    fprintf(stderr, "Redis connection failed: %s\n",
+            redis_ctx ? redis_ctx->errstr : "NULL context");
+    if (redis_ctx) { redisFree(redis_ctx); redis_ctx = NULL; }
+  } else {
+    printf("Redis connected\n");
+  }
+}
+
+static void write_mission_to_redis(bool goal_reached, const char *abort_reason) {
+  if (!redis_ctx) return;
+
+  char key[256];
+  snprintf(key, sizeof(key), "mission:%s:summary", session_id);
+
+  time_t now = time(NULL);
+  int duration = (int)(now - mission_start_time);
+  int total = moves_left_turn + moves_right_turn + moves_straight + moves_reverse;
+  char start_buf[32], end_buf[32];
+
+  snprintf(start_buf, sizeof(start_buf), "%ld", (long)mission_start_time);
+  snprintf(end_buf,   sizeof(end_buf),   "%ld", (long)now);
+
+  char dist_buf[32];
+  snprintf(dist_buf, sizeof(dist_buf), "%.2f", (double)total * 0.39);
+
+  redisCommand(redis_ctx,
+    "HSET %s robot_id %s mission_type %s start_time %s end_time %s "
+    "moves_left_turn %d moves_right_turn %d moves_straight %d moves_reverse %d "
+    "moves_total %d distance_traveled %s duration_seconds %d "
+    "mission_result %s abort_reason %s",
+    key,
+    "keyboard-player",
+    "explore",
+    start_buf, end_buf,
+    moves_left_turn, moves_right_turn, moves_straight, moves_reverse,
+    total, dist_buf, duration,
+    goal_reached ? "success" : "in_progress",
+    abort_reason ? abort_reason : ""
+  );
+}
+
+static bool mission_won = false;
+
+static void launch_mission_dashboard(void) {
+  printf("\n--- Launching Mission Dashboard ---\n");
+  write_mission_to_redis(mission_won, "");
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    execl("./missions/mission_dashboard", "mission_dashboard", session_id, NULL);
+    perror("execl failed");
+    _exit(1);
+  } else if (pid > 0) {
+    int status;
+    waitpid(pid, &status, 0);
+    printf("--- Mission Dashboard closed ---\n");
+  }
+}
+
+/* -------------------------------------------------------
+   JSON + HTTPS event sender
 ------------------------------------------------------- */
 
 static void send_event_json(
@@ -106,9 +185,9 @@ static void send_event_json(
 
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_OK)
-      printf("\nHTTPS POST successful ✔\n");
+      printf("\nHTTPS POST successful \n");
     else
-      printf("\nHTTPS POST failed ✘: %s\n", curl_easy_strerror(res));
+      printf("\nHTTPS POST failed: %s\n", curl_easy_strerror(res));
 
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
@@ -260,7 +339,14 @@ static bool try_move(int *px, int *py, int dx, int dy) {
   *py = ny;
   move_sequence++;
 
+  /* Track direction for Redis mission data */
+  if (dx == -1)      moves_left_turn++;
+  else if (dx == 1)  moves_right_turn++;
+  else if (dy == -1) moves_straight++;
+  else if (dy == 1)  moves_reverse++;
+
   send_event_json("player_move", *px, *py, false);
+  write_mission_to_redis(false, "");
   return true;
 }
 
@@ -270,8 +356,13 @@ static void regenerate(int *px, int *py, SDL_Window *win) {
   *px = 0;
   *py = 0;
   move_sequence = 0;
+  moves_left_turn  = 0;
+  moves_right_turn = 0;
+  moves_straight   = 0;
+  moves_reverse    = 0;
+  mission_start_time = time(NULL);
 
-  SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal");
+  SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal (L = Mission Dashboard)");
   send_event_json("maze_reset", *px, *py, false);
 }
 
@@ -282,6 +373,9 @@ static void regenerate(int *px, int *py, SDL_Window *win) {
 int main(void) {
   srand((unsigned)time(NULL));
   generate_session_id(session_id);
+  mission_start_time = time(NULL);
+
+  redis_connect();
 
   SDL_Init(SDL_INIT_VIDEO);
 
@@ -307,10 +401,20 @@ int main(void) {
       if (e.type == SDL_QUIT) running = false;
 
       if (e.type == SDL_KEYDOWN) {
-        if (e.key.keysym.sym == SDLK_ESCAPE) running = false;
+        if (e.key.keysym.sym == SDLK_ESCAPE) {
+          write_mission_to_redis(mission_won, "user exited");
+          running = false;
+        }
         if (e.key.keysym.sym == SDLK_r) {
+          write_mission_to_redis(mission_won, "user reset");
           won = false;
+          mission_won = false;
           regenerate(&px, &py, win);
+        }
+
+        /* L key = Left Trigger on GameHat -> launch mission dashboard */
+        if (e.key.keysym.sym == SDLK_l) {
+          launch_mission_dashboard();
         }
 
         if (!won) {
@@ -321,19 +425,22 @@ int main(void) {
 
           if (px == MAZE_W - 1 && py == MAZE_H - 1) {
             won = true;
-            SDL_SetWindowTitle(win, "You win!");
+            mission_won = true;
+            SDL_SetWindowTitle(win, "You win! (L = Mission Dashboard)");
             send_event_json("player_won", px, py, true);
+            write_mission_to_redis(true, "");
           }
         }
       }
     }
 
-    // ✅ CORRECT RENDER ORDER
+    //  RENDER ORDER
     draw_maze(r);
     draw_player_goal(r, px, py);
     SDL_RenderPresent(r);
   }
 
+  if (redis_ctx) redisFree(redis_ctx);
   SDL_DestroyRenderer(r);
   SDL_DestroyWindow(win);
   SDL_Quit();
