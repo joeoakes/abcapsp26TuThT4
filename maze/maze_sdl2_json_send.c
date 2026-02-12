@@ -22,7 +22,7 @@
 #define CELL   32
 #define PAD    16
 
-#define EVENT_ENDPOINT "https://localhost:8443/move" // changed endpoint to use HTTPS
+#define EVENT_ENDPOINT "https://localhost:8446/move" // changed endpoint to use HTTPS
 
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
