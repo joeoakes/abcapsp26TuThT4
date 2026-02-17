@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 // maze_sdl2.c
 // SDL2 maze game with JSON event reporting via HTTPS
 // Uses cJSON for JSON creation and libcurl for HTTPS POST requests
@@ -13,16 +14,17 @@
 // - Maze logic remains completely unchanged
 //
 // FIXES APPLIED:
-// - [FIX 1] Added CURLOPT_TIMEOUT_MS (500ms) and CURLOPT_CONNECTTIMEOUT_MS (300ms)
-//           to https_post_json() — prevents SDL event loop from freezing on every
-//           network call, which was blocking movement AND the window close button.
-// - [FIX 2] Added startup connectivity probe (send_json_telemetry + send_mission_to_ai_server)
-//           immediately after renderer creation, so the connection status is printed
-//           before the player touches any key.
-// - [FIX 3] Added fflush(stdout) after all printf blocks so output appears
-//           immediately in WSL terminals that buffer stdout.
-// - [FIX 4] Added SDL_Init, SDL_CreateWindow, and SDL_CreateRenderer error checks
-//           so the program exits cleanly with a message instead of crashing silently.
+// - [FIX 1] HTTPS requests now fire in detached background threads (pthread)
+//           so the SDL event loop is never blocked. Previously each move
+//           froze the game waiting for server responses.
+// - [FIX 2] Added startup connectivity probe so connection status is printed
+//           before the player presses any key.
+// - [FIX 3] Added fflush(stdout) so output appears immediately in WSL
+//           terminals that buffer stdout.
+// - [FIX 4] Added SDL_Init, SDL_CreateWindow, and SDL_CreateRenderer error
+//           checks so the program exits cleanly instead of crashing silently.
+// - [FIX 5] Server response body suppressed from stdout via CURLOPT_WRITEFUNCTION
+//           for clean, aligned status output.
 
 #include <SDL2/SDL.h>
 #include <stdbool.h>
@@ -34,6 +36,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <netdb.h>
+#include <pthread.h>
 
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
@@ -71,45 +74,72 @@ static redisContext *redis_ctx = NULL;
 static bool mission_won = false;
 
 /* -------------------------------------------------------
-   HTTPS helper
-   FIX 1: Added CURLOPT_TIMEOUT_MS and CURLOPT_CONNECTTIMEOUT_MS.
-   Without these, curl uses a default timeout of ~30 seconds.
-   Every keypress triggered two HTTPS calls, each potentially
-   blocking for 30s — freezing the SDL event loop and making
-   movement and window-close both unresponsive.
+   HTTPS helper — fire-and-forget via background thread
+   [FIX 1] Each POST runs in a detached pthread so the SDL
+   event loop is never blocked, even if a server is down.
+   [FIX 5] Response body is discarded to keep output clean.
 ------------------------------------------------------- */
-static bool https_post_json(const char *url, const char *json) {
+
+typedef struct {
+    char  url[256];
+    char *json;
+    char  label[32];
+} PostTask;
+
+/* Discard server response body so it doesn't print to stdout */
+static size_t discard_response(void *ptr, size_t size, size_t nmemb, void *ud) {
+    (void)ptr; (void)ud;
+    return size * nmemb;
+}
+
+static void *post_thread(void *arg) {
+    PostTask *task = (PostTask *)arg;
+
     CURL *curl = curl_easy_init();
-    if (!curl) return false;
+    if (curl) {
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_URL,            task->url);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS,     task->json);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT,        5L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  discard_response);
 
-    curl_easy_setopt(curl, CURLOPT_URL,        url);
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json);
+        CURLcode res = curl_easy_perform(curl);
 
-    /* Disable SSL verification (development/internal network only) */
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        if (res == CURLE_OK)
+            printf("-> %-18s [OK]\n", task->label);
+        else
+            printf("-> %-18s [FAIL] %s\n", task->label, curl_easy_strerror(res));
+        fflush(stdout); /* FIX 3 */
 
-    /* FIX 1: Hard timeouts so SDL is never blocked more than ~500ms total.
-       CURLOPT_CONNECTTIMEOUT_MS: abort if TCP connect takes longer than 300ms.
-       CURLOPT_TIMEOUT_MS:        abort the entire transfer after 500ms.       */
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 300L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,        500L);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
 
-    CURLcode res = curl_easy_perform(curl);
+    free(task->json);
+    free(task);
+    return NULL;
+}
 
-    curl_slist_free_all(headers);
-    curl_easy_cleanup(curl);
+static void https_post_async(const char *url, const char *json, const char *label) {
+    PostTask *task = malloc(sizeof(PostTask));
+    if (!task) return;
+    snprintf(task->url,   sizeof(task->url),   "%s", url);
+    task->json = strdup(json);
+    snprintf(task->label, sizeof(task->label), "%s", label);
 
-    return res == CURLE_OK;
+    pthread_t tid;
+    pthread_create(&tid, NULL, post_thread, task);
+    pthread_detach(tid);
 }
 
 /* -------------------------------------------------------
-   JSON telemetry → Logging + MiniPupper ONLY
-   FIX 3: fflush(stdout) added so WSL buffered output appears immediately.
+   JSON telemetry → Logging + MiniPupper (non-blocking)
 ------------------------------------------------------- */
 static void send_json_telemetry(
     const char *event_type,
@@ -132,14 +162,8 @@ static void send_json_telemetry(
 
     char *json_str = cJSON_PrintUnformatted(root);
 
-    bool log_ok = https_post_json(LOGGING_ENDPOINT,    json_str);
-    bool pup_ok = https_post_json(MINIPUPPER_ENDPOINT, json_str);
-
-    printf(log_ok ? "[OK]    Connected to logging server\n"
-                  : "[ERROR] Failed to connect to logging server\n");
-    printf(pup_ok ? "[OK]    Connected to MiniPupper\n"
-                  : "[ERROR] Failed to connect to MiniPupper\n");
-    fflush(stdout); /* FIX 3 */
+    https_post_async(LOGGING_ENDPOINT,    json_str, "Logging server");
+    https_post_async(MINIPUPPER_ENDPOINT, json_str, "MiniPupper");
 
     free(json_str);
     cJSON_Delete(root);
@@ -182,8 +206,7 @@ static void write_mission_to_redis(bool goal_reached, const char *abort_reason) 
 }
 
 /* -------------------------------------------------------
-   Send mission data to AI server ONLY
-   FIX 3: fflush(stdout) added.
+   Send mission data to AI server (non-blocking)
 ------------------------------------------------------- */
 static void send_mission_to_ai_server(void) {
     cJSON *root = cJSON_CreateObject();
@@ -197,11 +220,7 @@ static void send_mission_to_ai_server(void) {
 
     char *json_str = cJSON_PrintUnformatted(root);
 
-    bool ai_ok = https_post_json(AI_ENDPOINT, json_str);
-
-    printf(ai_ok ? "[OK]    Connected to AI server\n"
-                 : "[ERROR] Failed to connect to AI server\n");
-    fflush(stdout); /* FIX 3 */
+    https_post_async(AI_ENDPOINT, json_str, "AI server");
 
     free(json_str);
     cJSON_Delete(root);
@@ -290,7 +309,6 @@ static void maze_generate(int sx, int sy) {
         stack[top++] = (P){ nx, ny };
     }
 
-    /* Reset visited flags for potential future use */
     for (int y = 0; y < MAZE_H; y++)
         for (int x = 0; x < MAZE_W; x++)
             g[y][x].visited = false;
@@ -321,7 +339,6 @@ static void draw_maze(SDL_Renderer *r) {
 static void draw_player_goal(SDL_Renderer *r, int px, int py) {
     int ox = PAD, oy = PAD;
 
-    /* Goal tile (green) */
     SDL_Rect goal = {
         ox + (MAZE_W - 1) * CELL + 6,
         oy + (MAZE_H - 1) * CELL + 6,
@@ -330,7 +347,6 @@ static void draw_player_goal(SDL_Renderer *r, int px, int py) {
     SDL_SetRenderDrawColor(r, 40, 160, 70, 255);
     SDL_RenderFillRect(r, &goal);
 
-    /* Player tile (gold) */
     SDL_Rect p = {
         ox + px * CELL + 8,
         oy + py * CELL + 8,
@@ -415,15 +431,12 @@ int main(void) {
     maze_generate(0, 0);
 
     /* FIX 2: Startup connectivity probe.
-       Prints [OK] or [ERROR] for all three servers immediately on launch,
-       before the player presses any key. Previously this was missing entirely,
-       so there was no feedback until the first move (which also froze). */
+       Prints status for all three servers immediately on launch,
+       before the player presses any key. */
     printf("--- Startup connectivity test ---\n");
     fflush(stdout);
     send_json_telemetry("startup", 0, 0, false);
     send_mission_to_ai_server();
-    printf("--- Ready ---\n");
-    fflush(stdout);
 
     int  px      = 0, py = 0;
     bool running = true;
@@ -433,7 +446,7 @@ int main(void) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
 
-            if (e.type == SDL_QUIT)   /* FIX 1 makes this responsive again */
+            if (e.type == SDL_QUIT)
                 running = false;
 
             if (e.type == SDL_KEYDOWN) {

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <errno.h>
 #include <microhttpd.h>
 #include <mongoc/mongoc.h>
@@ -54,7 +55,7 @@ struct app_config {
 
 static struct app_config config;
 
-static int handle_post(void *cls,
+static enum MHD_Result handle_post(void *cls,
                        struct MHD_Connection *connection,
                        const char *url,
                        const char *method,
@@ -66,7 +67,8 @@ static int handle_post(void *cls,
     (void)version;
     (void)cls;
 
-    if (strcmp(method, "POST") != 0 || strcmp(url, "/move") != 0)
+    if (strcmp(method, "POST") != 0 ||
+        (strcmp(url, "/move") != 0 && strcmp(url, "/telemetry") != 0))
         return MHD_NO;
 
     if (*con_cls == NULL) {
@@ -168,7 +170,7 @@ int main(void) {
         return 1;
     }
 
-    printf("HTTPS server listening on https://localhost:%d/move\n", DEFAULT_PORT);
+    printf("HTTPS server listening on https://0.0.0.0:%d  (POST /move or /telemetry)\n", DEFAULT_PORT);
     getchar();
 
     MHD_stop_daemon(daemon);
