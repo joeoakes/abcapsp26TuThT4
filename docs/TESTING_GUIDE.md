@@ -10,7 +10,7 @@
        /telemetry         /telemetry                 /mission
             |                  |                        |
      Mini Pupper        Logging Server             AI Server
-     10.170.8.105       10.170.8.101              10.170.8.109
+     10.170.9.194       10.170.8.101              10.170.8.109
        [ROS2]             [MongoDB]                 [Redis]
 ```
 
@@ -21,7 +21,7 @@
 | Machine | Command | Password |
 |---------|---------|----------|
 | GameHat Controller | `ssh pi@10.170.8.189` | `raspberry` |
-| Mini Pupper | `ssh ubuntu@10.170.8.105` | `mangdang` |
+| Mini Pupper | `ssh ubuntu@10.170.9.194` | `mangdang` |
 | Logging Server | `ssh team4tt@10.170.8.101` | `pennstate4` |
 | AI Server | `ssh team4tt@10.170.8.109` | `pennstate4` |
 
@@ -236,7 +236,7 @@ You should see your latest mission summary with move counts and `mission_won` st
 |--------|-------------|
 | Logging Server (10.170.8.101) | `~/abcapsp26TuThT4/https/maze_https_mongo` |
 | AI Server (10.170.8.109) | `~/abcapsp26TuThT4/https/maze_https_redis` |
-| Mini Pupper (10.170.8.105) | Not deployed yet |
+| Mini Pupper (10.170.9.194) | Not deployed yet |
 
 ---
 
