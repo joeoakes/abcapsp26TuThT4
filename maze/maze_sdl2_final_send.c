@@ -208,6 +208,15 @@ static void send_event_json(
   cJSON_AddBoolToObject(root, "goal_reached", goal_reached);
   cJSON_AddStringToObject(root, "timestamp", timestamp);
 
+  cJSON *input = cJSON_AddObjectToObject(root, "input");
+  cJSON_AddStringToObject(input, "device", "keyboard");
+  cJSON_AddNumberToObject(input, "move_sequence", move_sequence);
+
+  cJSON *player = cJSON_AddObjectToObject(root, "player");
+  cJSON *position = cJSON_AddObjectToObject(player, "position");
+  cJSON_AddNumberToObject(position, "x", px);
+  cJSON_AddNumberToObject(position, "y", py);
+  
   char *json_str = cJSON_PrintUnformatted(root);
 
   // NEW: Route telemetry JSON to logging server and MiniPupper ONLY
