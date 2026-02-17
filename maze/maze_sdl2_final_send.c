@@ -127,7 +127,44 @@ static void send_json_telemetry(
 }
 
 /* -------------------------------------------------------
-   Redis mission data → AI server ONLY
+   Redis mission data write (UNCHANGED)
+------------------------------------------------------- */
+
+static void write_mission_to_redis(bool goal_reached, const char *abort_reason) {
+  if (!redis_ctx) return;
+
+  char key[256];
+  snprintf(key, sizeof(key), "mission:%s:summary", session_id);
+
+  time_t now = time(NULL);
+  int duration = (int)(now - mission_start_time);
+  int total = moves_left_turn + moves_right_turn + moves_straight + moves_reverse;
+
+  char start_buf[32], end_buf[32];
+  snprintf(start_buf, sizeof(start_buf), "%ld", (long)mission_start_time);
+  snprintf(end_buf,   sizeof(end_buf),   "%ld", (long)now);
+
+  char dist_buf[32];
+  snprintf(dist_buf, sizeof(dist_buf), "%.2f", (double)total * 0.39);
+
+  redisCommand(redis_ctx,
+    "HSET %s robot_id %s mission_type %s start_time %s end_time %s "
+    "moves_left_turn %d moves_right_turn %d moves_straight %d moves_reverse %d "
+    "moves_total %d distance_traveled %s duration_seconds %d "
+    "mission_result %s abort_reason %s",
+    key,
+    "keyboard-player",
+    "explore",
+    start_buf, end_buf,
+    moves_left_turn, moves_right_turn, moves_straight, moves_reverse,
+    total, dist_buf, duration,
+    goal_reached ? "success" : "in_progress",
+    abort_reason ? abort_reason : ""
+  );
+}
+
+/* -------------------------------------------------------
+   Send mission data to AI server ONLY
 ------------------------------------------------------- */
 
 static void send_mission_to_ai_server(void) {
@@ -153,7 +190,8 @@ static void send_mission_to_ai_server(void) {
 }
 
 /* -------------------------------------------------------
-   Utility helpers (UNCHANGED)
+   Remaining code unchanged
+   (maze gen, rendering, movement loop)
 ------------------------------------------------------- */
 
 static inline bool in_bounds(int x, int y) {
@@ -172,10 +210,6 @@ static void generate_session_id(char *out) {
   out[p] = '\0';
 }
 
-/* -------------------------------------------------------
-   Redis local connection (UNCHANGED)
-------------------------------------------------------- */
-
 static void redis_connect(void) {
   struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
   redis_ctx = redisConnectWithTimeout("127.0.0.1", 6379, tv);
@@ -187,10 +221,6 @@ static void redis_connect(void) {
     printf("Redis connected\n");
   }
 }
-
-/* -------------------------------------------------------
-   Maze generation (UNCHANGED)
-------------------------------------------------------- */
 
 static void knock_down(int x, int y, int nx, int ny) {
   if (nx == x && ny == y - 1) {
@@ -216,7 +246,6 @@ static void maze_init(void) {
     }
 }
 
-/* DFS maze generator unchanged */
 static void maze_generate(int sx, int sy) {
   typedef struct { int x, y; } P;
   P stack[MAZE_W * MAZE_H];
@@ -236,7 +265,7 @@ static void maze_generate(int sx, int sy) {
 
     for (int i=0;i<4;i++){
       int nx=x+dx[i], ny=y+dy[i];
-      if (in_bounds(nx,ny)&&!g[ny][nx].visited)
+      if (in_bounds(nx,ny) && !g[ny][nx].visited)
         neigh[ncount++] = (P){nx,ny};
     }
 
@@ -255,14 +284,9 @@ static void maze_generate(int sx, int sy) {
       g[y][x].visited=false;
 }
 
-/* -------------------------------------------------------
-   Rendering (UNCHANGED)
-------------------------------------------------------- */
-
 static void draw_maze(SDL_Renderer *r){
   SDL_SetRenderDrawColor(r,15,15,18,255);
   SDL_RenderClear(r);
-
   SDL_SetRenderDrawColor(r,230,230,230,255);
 
   int ox=PAD, oy=PAD;
@@ -273,7 +297,6 @@ static void draw_maze(SDL_Renderer *r){
       int y0=oy+y*CELL;
       int x1=x0+CELL;
       int y1=y0+CELL;
-
       uint8_t w=g[y][x].walls;
 
       if(w&WALL_N) SDL_RenderDrawLine(r,x0,y0,x1,y0);
@@ -291,7 +314,6 @@ static void draw_player_goal(SDL_Renderer *r,int px,int py){
     oy+(MAZE_H-1)*CELL+6,
     CELL-12,CELL-12
   };
-
   SDL_SetRenderDrawColor(r,40,160,70,255);
   SDL_RenderFillRect(r,&goal);
 
@@ -300,14 +322,9 @@ static void draw_player_goal(SDL_Renderer *r,int px,int py){
     oy+py*CELL+8,
     CELL-16,CELL-16
   };
-
   SDL_SetRenderDrawColor(r,213,189,64,255);
   SDL_RenderFillRect(r,&p);
 }
-
-/* -------------------------------------------------------
-   Movement (LOGIC UNCHANGED — only added sends)
-------------------------------------------------------- */
 
 static bool try_move(int *px,int *py,int dx,int dy){
   int x=*px,y=*py;
@@ -329,36 +346,32 @@ static bool try_move(int *px,int *py,int dx,int dy){
   else if(dy==-1) moves_straight++;
   else if(dy==1) moves_reverse++;
 
-  /* NEW: send separated data */
-  send_json_telemetry("player_move",*px,*py,false);
+  // Updated behavior:
+  write_mission_to_redis(false, "");
+  send_json_telemetry("player_move", *px, *py, false);
   send_mission_to_ai_server();
 
   return true;
 }
 
-/* -------------------------------------------------------
-   Main loop (UNCHANGED except routing calls)
-------------------------------------------------------- */
-
 int main(void){
   srand((unsigned)time(NULL));
   generate_session_id(session_id);
-  mission_start_time=time(NULL);
+  mission_start_time = time(NULL);
 
   curl_global_init(CURL_GLOBAL_DEFAULT);
   redis_connect();
 
   SDL_Init(SDL_INIT_VIDEO);
 
-  SDL_Window *win=SDL_CreateWindow(
+  SDL_Window *win = SDL_CreateWindow(
     "SDL2 Maze",
     SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,
     PAD*2+MAZE_W*CELL,
     PAD*2+MAZE_H*CELL,
     SDL_WINDOW_SHOWN
   );
-
-  SDL_Renderer *r=SDL_CreateRenderer(win,-1,SDL_RENDERER_ACCELERATED);
+  SDL_Renderer *r = SDL_CreateRenderer(win,-1,SDL_RENDERER_ACCELERATED);
 
   maze_init();
   maze_generate(0,0);
@@ -373,18 +386,27 @@ int main(void){
       if(e.type==SDL_QUIT) running=false;
 
       if(e.type==SDL_KEYDOWN){
-        if(e.key.keysym.sym==SDLK_ESCAPE) running=false;
+        if(e.key.keysym.sym==SDLK_ESCAPE){
+          write_mission_to_redis(mission_won, "user exited");
+          running=false;
+        }
 
-        if(!won){
+        if(!won && (
+            e.key.keysym.sym==SDLK_UP  ||
+            e.key.keysym.sym==SDLK_DOWN||
+            e.key.keysym.sym==SDLK_LEFT||
+            e.key.keysym.sym==SDLK_RIGHT
+          )) {
           try_move(&px,&py,
             (e.key.keysym.sym==SDLK_RIGHT)-(e.key.keysym.sym==SDLK_LEFT),
             (e.key.keysym.sym==SDLK_DOWN)-(e.key.keysym.sym==SDLK_UP)
           );
 
-          if(px==MAZE_W-1&&py==MAZE_H-1){
+          if(px==MAZE_W-1 && py==MAZE_H-1){
             won=true;
             mission_won=true;
             SDL_SetWindowTitle(win,"You win!");
+            write_mission_to_redis(true,"");
             send_json_telemetry("player_won",px,py,true);
             send_mission_to_ai_server();
           }
@@ -399,6 +421,7 @@ int main(void){
 
   if(redis_ctx) redisFree(redis_ctx);
   curl_global_cleanup();
+
   SDL_DestroyRenderer(r);
   SDL_DestroyWindow(win);
   SDL_Quit();
