@@ -21,6 +21,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <netdb.h>
 
 #include <curl/curl.h>
 #include <cjson/cJSON.h>
