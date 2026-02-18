@@ -200,10 +200,13 @@ int main(void) {
         return 1;
     }
 
-    printf("=== AI Server (Redis) ===\n");
-    printf("HTTPS listening on https://0.0.0.0:%d  (POST /mission)\n",
-           DEFAULT_PORT);
-    printf("Press Ctrl+C to stop\n");
+    printf("========================================\n");
+    printf("Database backend: Redis\n");
+    printf("Redis host: localhost\n");
+    printf("Redis port: 6379\n");
+    printf("Key namespace example: team4ttmission:TEST_MISSION\n");
+    printf("========================================\n");
+    printf("HTTPS Redis mission server running on port %d\n", DEFAULT_PORT);
 
     while (keep_running) {
         sleep(1);
