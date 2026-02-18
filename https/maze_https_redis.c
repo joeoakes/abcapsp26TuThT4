@@ -4,8 +4,9 @@
 // Uses redis-cli (no hiredis library needed)
 //
 // Build:
-//   gcc -O2 -Wall -Wextra -std=c11 maze_https_redis.c -o maze_https_redis \
-//       $(pkg-config --cflags --libs libmicrohttpd)
+/*  gcc -O2 -Wall -Wextra -std=c11 maze_https_redis.c -o maze_https_redis \ 
+       $(pkg-config --cflags --libs libmicrohttpd)
+*/
 //
 // Run:
 //   ./maze_https_redis
