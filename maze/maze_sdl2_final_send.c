@@ -7,7 +7,7 @@
 // MODIFICATIONS ADDED:
 // - JSON telemetry now sent to:
 //   * Logging Server (10.170.8.101:8446)
-//   * MiniPupper (10.170.9.194:8446)
+//   * MiniPupper (10.170.8.123:8446)
 // - Redis mission data sent ONLY to:
 //   * AI Server (10.170.8.109:8446)
 // - Confirmation or error printed for each server on every input
@@ -50,7 +50,7 @@
 /* HTTPS endpoints */
 #define LOGGING_ENDPOINT    "https://10.170.8.101:8446/telemetry"
 #define AI_ENDPOINT         "https://10.170.8.109:8446/mission"
-#define MINIPUPPER_ENDPOINT "https://10.170.9.194:8446/telemetry"
+#define MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
 
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
