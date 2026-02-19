@@ -206,6 +206,22 @@ static void write_mission_to_redis(bool goal_reached, const char *abort_reason) 
     );
 }
 
+static void launch_mission_dashboard(void) {
+  printf("\n--- Launching Mission Dashboard ---\n");
+  write_mission_to_redis(mission_won, "");
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    execl("./missions/mission_dashboard", "mission_dashboard", session_id, NULL);
+    perror("execl failed");
+    _exit(1);
+  } else if (pid > 0) {
+    int status;
+    waitpid(pid, &status, 0);
+    printf("--- Mission Dashboard closed ---\n");
+  }
+}
+
 /* -------------------------------------------------------
    Send mission data to AI server (non-blocking)
 ------------------------------------------------------- */
@@ -393,6 +409,22 @@ static bool try_move(int *px, int *py, int dx, int dy) {
     return true;
 }
 
+static void regenerate(int *px, int *py, SDL_Window *win) {
+  maze_init();
+  maze_generate(0, 0);
+  *px = 0;
+  *py = 0;
+  move_sequence = 0;
+  moves_left_turn  = 0;
+  moves_right_turn = 0;
+  moves_straight   = 0;
+  moves_reverse    = 0;
+  mission_start_time = time(NULL);
+
+  SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal (L = Mission Dashboard)");
+  send_json_telemetry("maze_reset", *px, *py, false);
+}
+
 /* -------------------------------------------------------
    MAIN
 ------------------------------------------------------- */
@@ -461,6 +493,18 @@ int main(void) {
                     running = false;
                 }
 
+            if (e.key.keysym.sym == SDLK_r) {
+              write_mission_to_redis(mission_won, "user reset");
+              won = false;
+              mission_won = false;
+              regenerate(&px, &py, win);
+            }
+                
+            /* L key = Left Trigger on GameHat -> launch mission dashboard */
+            if (e.key.keysym.sym == SDLK_l) {
+                launch_mission_dashboard();
+            }
+                
                 if (!won && (
                     e.key.keysym.sym == SDLK_UP    ||
                     e.key.keysym.sym == SDLK_DOWN  ||
