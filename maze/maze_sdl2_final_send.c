@@ -61,7 +61,7 @@ typedef struct {
 
 static Cell g[MAZE_H][MAZE_W];
 
-static char session_id[37];
+static char session_id[64];
 static int  move_sequence = 0;
 
 /* Mission tracking for Redis */
@@ -234,16 +234,21 @@ static inline bool in_bounds(int x, int y) {
     return (x >= 0 && x < MAZE_W && y >= 0 && y < MAZE_H);
 }
 
-static void generate_session_id(char *out) {
+static void generate_session_id(char *out, size_t len) {
     const char *hex = "0123456789abcdef";
-    int p = 0;
-    for (int i = 0; i < 36; i++) {
-        if (i == 8 || i == 13 || i == 18 || i == 23)
-            out[p++] = '-';
-        else
-            out[p++] = hex[rand() % 16];
-    }
-    out[p] = '\0';
+    char rand_part[17];
+    for (int i = 0; i < 16; i++)
+        rand_part[i] = hex[rand() % 16];
+    rand_part[16] = '\0';
+
+    time_t now = time(NULL);
+    struct tm tm;
+    gmtime_r(&now, &tm);
+
+    snprintf(out, len, "team4-%04d%02d%02d-%02d%02d%02d-%s",
+        tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+        tm.tm_hour, tm.tm_min, tm.tm_sec,
+        rand_part);
 }
 
 static void redis_connect(void) {
@@ -393,7 +398,7 @@ static bool try_move(int *px, int *py, int dx, int dy) {
 ------------------------------------------------------- */
 int main(void) {
     srand((unsigned)time(NULL));
-    generate_session_id(session_id);
+    generate_session_id(session_id, sizeof(session_id));
     mission_start_time = time(NULL);
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
