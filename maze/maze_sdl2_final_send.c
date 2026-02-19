@@ -206,6 +206,22 @@ static void write_mission_to_redis(bool goal_reached, const char *abort_reason) 
     );
 }
 
+static void launch_mission_dashboard(void) {
+  printf("\n--- Launching Mission Dashboard ---\n");
+  write_mission_to_redis(mission_won, "");
+
+  pid_t pid = fork();
+  if (pid == 0) {
+    execl("./missions/mission_dashboard", "mission_dashboard", session_id, NULL);
+    perror("execl failed");
+    _exit(1);
+  } else if (pid > 0) {
+    int status;
+    waitpid(pid, &status, 0);
+    printf("--- Mission Dashboard closed ---\n");
+  }
+}
+
 /* -------------------------------------------------------
    Send mission data to AI server (non-blocking)
 ------------------------------------------------------- */
@@ -456,6 +472,11 @@ int main(void) {
                     running = false;
                 }
 
+            /* L key = Left Trigger on GameHat -> launch mission dashboard */
+            if (e.key.keysym.sym == SDLK_l) {
+                launch_mission_dashboard();
+            }
+                
                 if (!won && (
                     e.key.keysym.sym == SDLK_UP    ||
                     e.key.keysym.sym == SDLK_DOWN  ||
