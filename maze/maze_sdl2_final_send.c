@@ -161,6 +161,7 @@ static void send_json_telemetry(
     cJSON_AddNumberToObject(root, "y",             py);
 
     char *json_str = cJSON_PrintUnformatted(root);
+    printf("\n--- JSON Payload ---\n%s\n", json_str);
 
     https_post_async(LOGGING_ENDPOINT,    json_str, "Logging server");
     https_post_async(MINIPUPPER_ENDPOINT, json_str, "MiniPupper");
