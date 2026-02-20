@@ -4,8 +4,8 @@
 // Receives POST /telemetry JSON and prints it to stdout
 //
 // Build:
-//   gcc -O2 -Wall -Wextra -std=c11 maze_https_telemetry.c -o maze_https_telemetry \
-//       $(pkg-config --cflags --libs libmicrohttpd)
+/*   gcc -O2 -Wall -Wextra -std=c11 maze_https_telemetry.c -o maze_https_telemetry \
+       $(pkg-config --cflags --libs libmicrohttpd) */
 //
 // Run:
 //   ./maze_https_telemetry

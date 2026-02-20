@@ -443,7 +443,7 @@ int main(void) {
     }
 
     SDL_Window *win = SDL_CreateWindow(
-        "SDL2 Maze",
+        "SDL2 Maze - Reach the green goal (L = Mission Dashboard)",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         PAD * 2 + MAZE_W * CELL,
         PAD * 2 + MAZE_H * CELL,
