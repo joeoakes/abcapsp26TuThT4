@@ -48,7 +48,7 @@
 #define PAD    16
 
 /* HTTPS endpoints */
-#define LOGGING_ENDPOINT    "https://10.170.8.101:8446/telemetry"
+#define LOGGING_ENDPOINT    "https://10.170.8.130:8446/telemetry"
 #define AI_ENDPOINT         "https://10.170.8.109:8446/mission"
 #define MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
 
