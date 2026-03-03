@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from pupil\_apriltags import Detector
+from pupil_apriltags import Detector
 import math
 
 def rvec_to_rpy_degrees(rvec):
@@ -14,7 +14,7 @@ def rvec_to_rpy_degrees(rvec):
 def main():
     # ---- Camera selection ----
     # Try 0, 1, 2 if needed. For BRIO, 0 is often correct.
-    cam_index = 0
+    cam_index = 1
 
     # Prefer DirectShow on Windows for better stability:
     cap = cv2.VideoCapture(cam_index, cv2.CAP_DSHOW)
