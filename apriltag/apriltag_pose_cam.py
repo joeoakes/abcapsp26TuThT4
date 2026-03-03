@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from pupil_apriltags import Detector
+from pupil\_apriltags import Detector
 import math
 
 def rvec_to_rpy_degrees(rvec):
