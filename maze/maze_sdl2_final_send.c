@@ -1,12 +1,22 @@
 #define _GNU_SOURCE
-// maze_sdl2.c
+// maze_sdl2_final_send.c
+// SDL2 maze game with JSON event reporting via HTTPS (mTLS)
+//
+// Build (run from maze/):
+/*   
+gcc -O2 -Wall -Wextra -std=c11 maze_sdl2_final_send.c -o maze_sdl2_final_send \
+       $(pkg-config --cflags --libs sdl2) -lcurl -lcjson -lhiredis -lpthread
+*/
+// Requires: https/certs/client.crt, https/certs/client.key, https/certs/ca.crt (mTLS)
+// Run from project root or maze/ directory.
+//
 // SDL2 maze game with JSON event reporting via HTTPS
 // Uses cJSON for JSON creation and libcurl for HTTPS POST requests
 // Writes mission data to Redis and launches mission dashboard on L key
 //
 // MODIFICATIONS ADDED:
 // - JSON telemetry now sent to:
-//   * Logging Server (10.170.8.101:8446)
+//   * Logging Server (10.170.8.130:8446)
 //   * MiniPupper (10.170.8.123:8446)
 // - Redis mission data sent ONLY to:
 //   * AI Server (10.170.8.109:8446)
@@ -48,10 +58,9 @@
 #define PAD    16
 
 /* HTTPS endpoints */
-#define LOGGING_ENDPOINT    "https://10.170.8.101:8446/telemetry"
+#define LOGGING_ENDPOINT    "https://10.170.8.130:8446/telemetry"
 #define AI_ENDPOINT         "https://10.170.8.109:8446/mission"
 #define MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
-
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
 typedef struct {
@@ -84,7 +93,15 @@ typedef struct {
     char  url[256];
     char *json;
     char  label[32];
+    const char *client_cert;
+    const char *client_key;
+    const char *ca_file;
 } PostTask;
+
+/* mTLS: client cert paths (override via env: MTLS_CLIENT_CERT, MTLS_CLIENT_KEY, MTLS_CA_FILE) */
+static const char *mtls_client_cert;
+static const char *mtls_client_key;
+static const char *mtls_ca_file;
 
 /* Discard server response body so it doesn't print to stdout */
 static size_t discard_response(void *ptr, size_t size, size_t nmemb, void *ud) {
@@ -103,8 +120,14 @@ static void *post_thread(void *arg) {
         curl_easy_setopt(curl, CURLOPT_URL,            task->url);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS,     task->json);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+        /* mTLS: client presents cert, verify server against CA (professor's approach) */
+        curl_easy_setopt(curl, CURLOPT_SSLCERT,        task->client_cert);
+        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE,    "PEM");
+        curl_easy_setopt(curl, CURLOPT_SSLKEY,         task->client_key);
+        curl_easy_setopt(curl, CURLOPT_SSLKEYTYPE,     "PEM");
+        curl_easy_setopt(curl, CURLOPT_CAINFO,         task->ca_file);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT,        5L);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  discard_response);
@@ -132,6 +155,9 @@ static void https_post_async(const char *url, const char *json, const char *labe
     snprintf(task->url,   sizeof(task->url),   "%s", url);
     task->json = strdup(json);
     snprintf(task->label, sizeof(task->label), "%s", label);
+    task->client_cert = mtls_client_cert;
+    task->client_key  = mtls_client_key;
+    task->ca_file     = mtls_ca_file;
 
     pthread_t tid;
     pthread_create(&tid, NULL, post_thread, task);
@@ -432,6 +458,30 @@ int main(void) {
     srand((unsigned)time(NULL));
     generate_session_id(session_id, sizeof(session_id));
     mission_start_time = time(NULL);
+
+    /* mTLS: load client cert paths from env or use defaults */
+    mtls_client_cert = getenv("MTLS_CLIENT_CERT");
+    mtls_client_key  = getenv("MTLS_CLIENT_KEY");
+    mtls_ca_file     = getenv("MTLS_CA_FILE");
+    if (!mtls_client_cert) mtls_client_cert = "https/certs/client.crt";
+    if (!mtls_client_key)  mtls_client_key  = "https/certs/client.key";
+    if (!mtls_ca_file)     mtls_ca_file     = "https/certs/ca.crt";
+
+    /* If default path missing and no env set, try maze/ relative path */
+    if (access(mtls_client_cert, R_OK) != 0 && !getenv("MTLS_CLIENT_CERT")) {
+        mtls_client_cert = "../https/certs/client.crt";
+        mtls_client_key  = "../https/certs/client.key";
+        mtls_ca_file     = "../https/certs/ca.crt";
+    }
+
+    /* Verify mTLS cert files exist */
+    if (access(mtls_client_cert, R_OK) != 0 || access(mtls_client_key, R_OK) != 0 ||
+        access(mtls_ca_file, R_OK) != 0) {
+        fprintf(stderr, "mTLS cert files not found. Run from project root or maze/, or set:\n"
+                "  MTLS_CLIENT_CERT MTLS_CLIENT_KEY MTLS_CA_FILE\n"
+                "Generate certs: cd https/certs && ./gen_mtls_certs.sh\n");
+        return 1;
+    }
 
     curl_global_init(CURL_GLOBAL_DEFAULT);
     redis_connect();

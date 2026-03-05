@@ -3,10 +3,24 @@ __pycache__/
 *.pyc
 .DS_Store
 .vscode/
+
+# Build artifacts / executables
 https/maze_https_mongo
 https/maze_https_redis
+https/maze_https_telemetry
 https/maze_https_ros2_bridge
 maze/maze_sdl2_json_send
 maze/maze_sdl2
+maze/maze_sdl2_final_send
 maze/maze_game
 maze/missions/mission_dashboard
+*.o
+*.a
+
+# mTLS certificates — never commit private keys; regenerate with gen_mtls_certs.sh
+https/certs/*.key
+https/certs/ca.key
+https/certs/*.crt
+https/certs/ca.crt
+https/certs/*.csr
+https/certs/ca.srl

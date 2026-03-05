@@ -45,23 +45,26 @@ sudo apt install -y   build-essential   pkg-config   libmicrohttpd-dev   libgnut
 
 ---
 
-## TLS Certificates (Required)
+## mTLS Certificates (Required)
 
-For development and lab use, generate a **self-signed certificate**:
+The project uses **mutual TLS (mTLS)**: the server proves its identity, and the client (robot/GameHat) proves its identity. Generate all certificates with:
 
 ```bash
-mkdir certs
-cd certs
-
-openssl req -x509 -newkey rsa:2048   -keyout server.key   -out server.crt   -days 365   -nodes   -subj "/CN=localhost"
+cd https/certs
+./gen_mtls_certs.sh
 ```
 
-Expected files:
+This creates:
 
-```
-certs/server.crt
-certs/server.key
-```
+| File | Purpose |
+|------|---------|
+| `ca.crt` | CA certificate — server uses to verify clients; client uses to verify server |
+| `server.crt` | Server certificate |
+| `server.key` | Server private key |
+| `client.crt` | Client certificate (robot/GameHat) |
+| `client.key` | Client private key |
+
+**Deploy:** Copy `server.crt`, `server.key`, and `ca.crt` to each HTTPS server. Copy `client.crt`, `client.key`, and `ca.crt` to each robot/GameHat client.
 
 ---
 
@@ -99,10 +102,11 @@ LISTEN_PORT=9443 CERT_FILE=certs/server.crt KEY_FILE=certs/server.key MONGO_URI=
 
 ## Test with curl
 
-Because a self-signed certificate is used, include `-k`:
+With mTLS, provide client cert, key, and CA:
 
 ```bash
-curl -k -X POST https://localhost:8443/move   -H "Content-Type: application/json"   -d '{
+curl --cert certs/client.crt --key certs/client.key --cacert certs/ca.crt \
+  -X POST https://localhost:8446/move -H "Content-Type: application/json" -d '{
     "event_type": "player_move",
     "input": {
       "device": "joystick",
@@ -116,6 +120,8 @@ curl -k -X POST https://localhost:8443/move   -H "Content-Type: application/json
   }'
 ```
 
+For servers using different hostnames (e.g. `10.170.8.101`), the server cert includes SANs for common lab IPs.
+
 Expected response:
 
 ```json
@@ -128,14 +134,7 @@ Expected response:
 
 From an SDL or C-based client, HTTPS requests are commonly sent using **libcurl**.
 
-For development (self-signed certificates only):
-
-```c
-curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
-curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
-```
-
-⚠️ Do **not** disable certificate verification in production.
+The maze client uses mTLS: `CURLOPT_SSLCERT`, `CURLOPT_SSLKEY`, `CURLOPT_CAINFO`, with `CURLOPT_SSL_VERIFYPEER=1` and `CURLOPT_SSL_VERIFYHOST=2`. Override paths via `MTLS_CLIENT_CERT`, `MTLS_CLIENT_KEY`, `MTLS_CA_FILE`.
 
 ---
 
@@ -154,6 +153,7 @@ For production deployments:
 
 ## Summary
 
+✔ mTLS (mutual TLS) — server and client both prove identity  
 ✔ Encrypted HTTPS transport  
 ✔ Same JSON payload as HTTP version  
 ✔ MongoDB ingestion unchanged  

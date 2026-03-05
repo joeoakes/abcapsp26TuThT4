@@ -1,0 +1,22 @@
+[req]
+prompt = no
+distinguished_name = req_distinguished_name
+req_extensions = req_ext
+
+[req_distinguished_name]
+C = US
+ST = PA
+L = Abington
+O = Penn State Capstone
+OU = Team4tt
+CN = localhost
+
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+IP.2 = 10.170.8.130
+IP.3 = 10.170.8.109
+IP.4 = 10.170.8.123

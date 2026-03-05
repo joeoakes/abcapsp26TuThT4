@@ -108,6 +108,7 @@ Robots operate locally with real-time autonomy while securely logging mission te
 - mTLS (mutual TLS):
   - Server proves identity
   - Robot/client proves identity
+  - **mTLS is HTTPS client-to-server only** — it does not involve Redis, MongoDB, or other backend databases
 - X.509 certificates for every robot
 - Zero-trust communication model
 
