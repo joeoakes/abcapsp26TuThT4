@@ -1,5 +1,16 @@
+# Virtual environments
 venv/
+.venv/
+apriltag/venv/
+
+# Environment variables
+env/
+ENV/
+
+# Python cache
 __pycache__/
+
+# Python bytecode
 *.pyc
 .DS_Store
 .vscode/
@@ -24,3 +35,7 @@ https/certs/*.crt
 https/certs/ca.crt
 https/certs/*.csr
 https/certs/ca.srl
+
+# Bundles & archives with secrets
+certs_bundle.tar.gz
+*.tar.gz
