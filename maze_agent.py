@@ -19,6 +19,7 @@ from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
 import maze_redis
+import rag_maze
 from tools_maze import astar, validate_plan
 
 logger = logging.getLogger(__name__)
@@ -144,9 +145,13 @@ def planner(state: MazeState) -> dict:
 
     chosen_plan = astar_plan
     reason = f"A* plan: {len(astar_plan)} moves"
-    rag_context = None
+    rag_context = _fetch_rag_context(state)
 
-    llm_plan = _try_llm_plan(state)
+    llm_state = {**state}
+    if rag_context:
+        llm_state["rag_context"] = rag_context
+
+    llm_plan = _try_llm_plan(llm_state)
     if llm_plan is not None:
         ok, msg = validate_plan(llm_plan, width, height, cells, x, y)
         if ok:
@@ -238,6 +243,47 @@ def _try_llm_plan(state: MazeState) -> Optional[List[str]]:
         logger.debug("LLM plan attempt failed: %s", e)
 
     return None
+
+
+def _fetch_rag_context(state: MazeState) -> Optional[str]:
+    """Retrieve RAG context from Redis if a connection and maze_sig are available."""
+    r = state.get("redis")
+    if not r:
+        return None
+
+    sid = state.get("session_id", "")
+    maze_data = maze_redis.load_maze(r, sid)
+    if not maze_data:
+        return None
+
+    history = maze_redis.get_history(r, sid)
+    left = right = up = down = 0
+    for m in history:
+        if m == "LEFT":    left += 1
+        elif m == "RIGHT": right += 1
+        elif m == "UP":    up += 1
+        elif m == "DOWN":  down += 1
+    total = len(history) or 1
+
+    current_summary = {
+        "moves_left_turn":  left,
+        "moves_right_turn": right,
+        "moves_straight":   up,
+        "moves_reverse":    down,
+        "moves_total":      len(history),
+        "duration_seconds":  0,
+        "distance_traveled": total * 0.39,
+        "mission_result":   "in_progress",
+    }
+
+    try:
+        ctx = rag_maze.retrieve_rag_context(r, current_summary, top_k=3)
+        if ctx:
+            logger.info("Planner: RAG context retrieved (%d chars)", len(ctx))
+        return ctx or None
+    except Exception as e:
+        logger.debug("RAG retrieval failed: %s", e)
+        return None
 
 
 # ── Routing ──────────────────────────────────────────────────────────
