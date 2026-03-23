@@ -60,6 +60,7 @@ gcc -O2 -Wall -Wextra -std=c11 maze_sdl2_final_send.c -o maze_sdl2_final_send \
 /* HTTPS endpoints */
 #define LOGGING_ENDPOINT    "https://10.170.8.130:8446/telemetry"
 #define AI_ENDPOINT         "https://10.170.8.109:8446/mission"
+#define AI_MAZE_ENDPOINT    "https://10.170.8.109:8447/maze"
 #define MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
@@ -81,6 +82,15 @@ static int    moves_reverse    = 0;
 static time_t mission_start_time;
 static redisContext *redis_ctx = NULL;
 static bool mission_won = false;
+
+/* AI auto-play state */
+#define MAX_PLAN_MOVES 1024
+#define AUTOPLAY_DELAY_MS 150
+static char   ai_plan[MAX_PLAN_MOVES][8];
+static int    ai_plan_len   = 0;
+static int    ai_plan_index = 0;
+static bool   ai_autoplay   = false;
+static Uint32 ai_last_tick  = 0;
 
 /* -------------------------------------------------------
    HTTPS helper — fire-and-forget via background thread
@@ -270,6 +280,114 @@ static void send_mission_to_ai_server(void) {
 }
 
 /* -------------------------------------------------------
+   Send full maze grid to AI solver (SYNCHRONOUS).
+   Captures the JSON response, parses the plan array,
+   and stores it in ai_plan[] for auto-play.
+   Increases timeout to 60s since the LLM may be slow.
+------------------------------------------------------- */
+
+struct response_buf { char *data; size_t size; };
+
+static size_t capture_response(void *ptr, size_t size, size_t nmemb, void *ud) {
+    struct response_buf *buf = (struct response_buf *)ud;
+    size_t total = size * nmemb;
+    buf->data = realloc(buf->data, buf->size + total + 1);
+    memcpy(buf->data + buf->size, ptr, total);
+    buf->size += total;
+    buf->data[buf->size] = '\0';
+    return total;
+}
+
+static void parse_plan_response(const char *json_body) {
+    ai_plan_len   = 0;
+    ai_plan_index = 0;
+
+    cJSON *root = cJSON_Parse(json_body);
+    if (!root) return;
+
+    cJSON *plan = cJSON_GetObjectItem(root, "plan");
+    if (!cJSON_IsArray(plan)) { cJSON_Delete(root); return; }
+
+    int n = cJSON_GetArraySize(plan);
+    if (n > MAX_PLAN_MOVES) n = MAX_PLAN_MOVES;
+
+    for (int i = 0; i < n; i++) {
+        cJSON *item = cJSON_GetArrayItem(plan, i);
+        if (cJSON_IsString(item) && item->valuestring)
+            snprintf(ai_plan[i], sizeof(ai_plan[i]), "%s", item->valuestring);
+    }
+    ai_plan_len = n;
+    cJSON_Delete(root);
+
+    printf("AI plan received: %d moves\n", ai_plan_len);
+    fflush(stdout);
+}
+
+static void send_maze_grid(void) {
+    cJSON *root = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(root, "session_id", session_id);
+    cJSON_AddNumberToObject(root, "width",      MAZE_W);
+    cJSON_AddNumberToObject(root, "height",     MAZE_H);
+    cJSON_AddNumberToObject(root, "start_x",    0);
+    cJSON_AddNumberToObject(root, "start_y",    0);
+    cJSON_AddNumberToObject(root, "goal_x",     MAZE_W - 1);
+    cJSON_AddNumberToObject(root, "goal_y",     MAZE_H - 1);
+
+    cJSON *arr = cJSON_CreateArray();
+    for (int y = 0; y < MAZE_H; y++)
+        for (int x = 0; x < MAZE_W; x++)
+            cJSON_AddItemToArray(arr, cJSON_CreateNumber(g[y][x].walls));
+    cJSON_AddItemToObject(root, "cells", arr);
+
+    char *json_str = cJSON_PrintUnformatted(root);
+
+    printf("\n--- Sending maze grid to AI solver ---\n");
+    fflush(stdout);
+
+    struct response_buf resp = { .data = NULL, .size = 0 };
+
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL,            AI_MAZE_ENDPOINT);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS,     json_str);
+        curl_easy_setopt(curl, CURLOPT_SSLCERT,        mtls_client_cert);
+        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE,    "PEM");
+        curl_easy_setopt(curl, CURLOPT_SSLKEY,         mtls_client_key);
+        curl_easy_setopt(curl, CURLOPT_SSLKEYTYPE,     "PEM");
+        curl_easy_setopt(curl, CURLOPT_CAINFO,         mtls_ca_file);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT,        60L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  capture_response);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &resp);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res == CURLE_OK && resp.data) {
+            printf("-> AI maze solver   [OK]\n");
+            parse_plan_response(resp.data);
+        } else {
+            printf("-> AI maze solver   [FAIL] %s\n", curl_easy_strerror(res));
+            ai_plan_len = 0;
+        }
+        fflush(stdout);
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    free(resp.data);
+    free(json_str);
+    cJSON_Delete(root);
+}
+
+/* -------------------------------------------------------
    Utility helpers
 ------------------------------------------------------- */
 static inline bool in_bounds(int x, int y) {
@@ -447,8 +565,13 @@ static void regenerate(int *px, int *py, SDL_Window *win) {
   moves_reverse    = 0;
   mission_start_time = time(NULL);
 
-  SDL_SetWindowTitle(win, "SDL2 Maze - Reach the green goal (L = Mission Dashboard)");
+  ai_autoplay   = false;
+  ai_plan_len   = 0;
+  ai_plan_index = 0;
+
+  SDL_SetWindowTitle(win, "SDL2 Maze - A=AI solve, R=regen, L=dashboard");
   send_json_telemetry("maze_reset", *px, *py, false);
+  send_maze_grid();
 }
 
 /* -------------------------------------------------------
@@ -493,7 +616,7 @@ int main(void) {
     }
 
     SDL_Window *win = SDL_CreateWindow(
-        "SDL2 Maze - Reach the green goal (L = Mission Dashboard)",
+        "SDL2 Maze - A=AI solve, R=regen, L=dashboard",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         PAD * 2 + MAZE_W * CELL,
         PAD * 2 + MAZE_H * CELL,
@@ -525,6 +648,7 @@ int main(void) {
     fflush(stdout);
     send_json_telemetry("startup", 0, 0, false);
     send_mission_to_ai_server();
+    send_maze_grid();
 
     int  px      = 0, py = 0;
     bool running = true;
@@ -554,8 +678,26 @@ int main(void) {
             if (e.key.keysym.sym == SDLK_l) {
                 launch_mission_dashboard();
             }
-                
-                if (!won && (
+
+            /* A key = toggle AI auto-play */
+            if (e.key.keysym.sym == SDLK_a && !won) {
+                if (ai_plan_len > 0 && ai_plan_index < ai_plan_len) {
+                    ai_autoplay = !ai_autoplay;
+                    ai_last_tick = SDL_GetTicks();
+                    printf("AI auto-play %s (%d moves remaining)\n",
+                           ai_autoplay ? "ON" : "OFF",
+                           ai_plan_len - ai_plan_index);
+                    fflush(stdout);
+                    SDL_SetWindowTitle(win, ai_autoplay
+                        ? "AI solving... (A=pause)"
+                        : "SDL2 Maze - A=AI solve, R=regen, L=dashboard");
+                } else {
+                    printf("No AI plan available (server unreachable?)\n");
+                    fflush(stdout);
+                }
+            }
+
+                if (!won && !ai_autoplay && (
                     e.key.keysym.sym == SDLK_UP    ||
                     e.key.keysym.sym == SDLK_DOWN  ||
                     e.key.keysym.sym == SDLK_LEFT  ||
@@ -575,6 +717,37 @@ int main(void) {
                         send_json_telemetry("player_won", px, py, true);
                         send_mission_to_ai_server();
                     }
+                }
+            }
+        }
+
+        /* AI auto-play: execute one move per tick */
+        if (ai_autoplay && !won && ai_plan_index < ai_plan_len) {
+            Uint32 now_tick = SDL_GetTicks();
+            if (now_tick - ai_last_tick >= AUTOPLAY_DELAY_MS) {
+                ai_last_tick = now_tick;
+                const char *move = ai_plan[ai_plan_index];
+                int adx = 0, ady = 0;
+                if (strcmp(move, "UP")    == 0) { adx =  0; ady = -1; }
+                if (strcmp(move, "DOWN")  == 0) { adx =  0; ady =  1; }
+                if (strcmp(move, "LEFT")  == 0) { adx = -1; ady =  0; }
+                if (strcmp(move, "RIGHT") == 0) { adx =  1; ady =  0; }
+
+                if (try_move(&px, &py, adx, ady)) {
+                    ai_plan_index++;
+                    if (px == MAZE_W - 1 && py == MAZE_H - 1) {
+                        won         = true;
+                        mission_won = true;
+                        ai_autoplay = false;
+                        SDL_SetWindowTitle(win, "AI solved the maze! R=regen");
+                        write_mission_to_redis(true, "");
+                        send_json_telemetry("ai_won", px, py, true);
+                        send_mission_to_ai_server();
+                    }
+                }
+                if (ai_plan_index >= ai_plan_len && !won) {
+                    ai_autoplay = false;
+                    SDL_SetWindowTitle(win, "AI plan done (not at goal). A=retry");
                 }
             }
         }

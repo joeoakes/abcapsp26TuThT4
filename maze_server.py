@@ -8,14 +8,18 @@ Endpoints:
     GET   /maze/{session_id}/status full session state (position, plan, history …)
     POST  /maze/{session_id}/solve  re-solve from current position
 
-Run:
+Run (plain HTTP for local testing):
     uvicorn maze_server:app --host 0.0.0.0 --port 8447
+
+Run (mTLS for production — on AI server):
+    python maze_server.py
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import ssl
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
@@ -30,6 +34,11 @@ logger = logging.getLogger(__name__)
 
 REDIS_HOST = os.getenv("REDIS_HOST", "127.0.0.1")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+
+SSL_CERT = os.getenv("SSL_CERT", "https/certs/server.crt")
+SSL_KEY  = os.getenv("SSL_KEY",  "https/certs/server.key")
+SSL_CA   = os.getenv("SSL_CA",   "https/certs/ca.crt")
+LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8447"))
 
 app = FastAPI(title="Maze A* Solver", version="1.0.0")
 
@@ -209,3 +218,25 @@ def health():
         return {"status": "ok", "redis": "connected"}
     except Exception as e:
         return {"status": "degraded", "redis": str(e)}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    use_ssl = all(os.path.exists(p) for p in (SSL_CERT, SSL_KEY, SSL_CA))
+
+    if use_ssl:
+        print(f"Starting mTLS server on port {LISTEN_PORT}")
+        print(f"  cert: {SSL_CERT}  key: {SSL_KEY}  ca: {SSL_CA}")
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=LISTEN_PORT,
+            ssl_certfile=SSL_CERT,
+            ssl_keyfile=SSL_KEY,
+            ssl_ca_certs=SSL_CA,
+            ssl_cert_reqs=ssl.CERT_REQUIRED,
+        )
+    else:
+        print(f"Starting HTTP server on port {LISTEN_PORT} (no certs found)")
+        uvicorn.run(app, host="0.0.0.0", port=LISTEN_PORT)
