@@ -61,6 +61,7 @@ gcc -O2 -Wall -Wextra -std=c11 maze_sdl2_final_send.c -o maze_sdl2_final_send \
 #define LOGGING_ENDPOINT    "https://10.170.8.130:8446/telemetry"
 #define AI_ENDPOINT         "https://10.170.8.109:8446/mission"
 #define AI_MAZE_ENDPOINT    "https://10.170.8.109:8447/maze"
+#define AI_MISSION_WEB_API  "https://10.170.8.109:8447/mission"
 #define MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
@@ -207,58 +208,6 @@ static void send_json_telemetry(
 }
 
 /* -------------------------------------------------------
-   Redis mission data write (UNCHANGED)
-------------------------------------------------------- */
-static void write_mission_to_redis(bool goal_reached, const char *abort_reason) {
-    if (!redis_ctx) return;
-
-    char key[256];
-    snprintf(key, sizeof(key), "mission:%s:summary", session_id);
-
-    time_t now      = time(NULL);
-    int    duration = (int)(now - mission_start_time);
-    int    total    = moves_left_turn + moves_right_turn
-                    + moves_straight  + moves_reverse;
-
-    char start_buf[32], end_buf[32];
-    snprintf(start_buf, sizeof(start_buf), "%ld", (long)mission_start_time);
-    snprintf(end_buf,   sizeof(end_buf),   "%ld", (long)now);
-
-    char dist_buf[32];
-    snprintf(dist_buf, sizeof(dist_buf), "%.2f", (double)total * 0.39);
-
-    redisCommand(redis_ctx,
-        "HSET %s robot_id %s mission_type %s start_time %s end_time %s "
-        "moves_left_turn %d moves_right_turn %d moves_straight %d moves_reverse %d "
-        "moves_total %d distance_traveled %s duration_seconds %d "
-        "mission_result %s abort_reason %s",
-        key,
-        "keyboard-player", "explore",
-        start_buf, end_buf,
-        moves_left_turn, moves_right_turn, moves_straight, moves_reverse,
-        total, dist_buf, duration,
-        goal_reached ? "success" : "in_progress",
-        abort_reason ? abort_reason : ""
-    );
-}
-
-static void launch_mission_dashboard(void) {
-  printf("\n--- Launching Mission Dashboard ---\n");
-  write_mission_to_redis(mission_won, "");
-
-  pid_t pid = fork();
-  if (pid == 0) {
-    execl("./missions/mission_dashboard", "mission_dashboard", session_id, NULL);
-    perror("execl failed");
-    _exit(1);
-  } else if (pid > 0) {
-    int status;
-    waitpid(pid, &status, 0);
-    printf("--- Mission Dashboard closed ---\n");
-  }
-}
-
-/* -------------------------------------------------------
    Send mission data to AI server (non-blocking)
 ------------------------------------------------------- */
 static void send_mission_to_ai_server(void) {
@@ -296,6 +245,132 @@ static size_t capture_response(void *ptr, size_t size, size_t nmemb, void *ud) {
     buf->size += total;
     buf->data[buf->size] = '\0';
     return total;
+}
+
+/* Local Redis (GameHat) + POST /mission/{id}/summary on maze server (web dashboard). */
+static void post_mission_summary_to_web(
+    const char *result_label, const char *abort_reason,
+    const char *start_buf, const char *end_buf,
+    int total, const char *dist_buf, int duration)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "robot_id", "keyboard-player");
+    cJSON_AddStringToObject(root, "mission_type", "explore");
+    cJSON_AddStringToObject(root, "start_time", start_buf);
+    cJSON_AddStringToObject(root, "end_time", end_buf);
+    cJSON_AddNumberToObject(root, "moves_left_turn", moves_left_turn);
+    cJSON_AddNumberToObject(root, "moves_right_turn", moves_right_turn);
+    cJSON_AddNumberToObject(root, "moves_straight", moves_straight);
+    cJSON_AddNumberToObject(root, "moves_reverse", moves_reverse);
+    cJSON_AddNumberToObject(root, "moves_total", total);
+    cJSON_AddStringToObject(root, "distance_traveled", dist_buf);
+    cJSON_AddNumberToObject(root, "duration_seconds", duration);
+    cJSON_AddStringToObject(root, "mission_result", result_label);
+    cJSON_AddStringToObject(root, "abort_reason", abort_reason ? abort_reason : "");
+
+    char *json_str = cJSON_PrintUnformatted(root);
+    char url[384];
+    snprintf(url, sizeof(url), "%s/%s/summary", AI_MISSION_WEB_API, session_id);
+
+    printf("--- Sync mission summary to web API ---\n");
+    fflush(stdout);
+
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        curl_easy_setopt(curl, CURLOPT_URL, url);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, json_str);
+        curl_easy_setopt(curl, CURLOPT_SSLCERT, mtls_client_cert);
+        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE, "PEM");
+        curl_easy_setopt(curl, CURLOPT_SSLKEY, mtls_client_key);
+        curl_easy_setopt(curl, CURLOPT_SSLKEYTYPE, "PEM");
+        curl_easy_setopt(curl, CURLOPT_CAINFO, mtls_ca_file);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, discard_response);
+
+        CURLcode res = curl_easy_perform(curl);
+        if (res == CURLE_OK)
+            printf("-> Mission web sync   [OK]\n");
+        else
+            printf("-> Mission web sync   [FAIL] %s\n", curl_easy_strerror(res));
+        fflush(stdout);
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    free(json_str);
+    cJSON_Delete(root);
+}
+
+static void flush_mission_summary(bool goal_reached, const char *abort_reason) {
+    const char *ar = (abort_reason && abort_reason[0]) ? abort_reason : "";
+    const char *result_label;
+    if (goal_reached)
+        result_label = "Success";
+    else if (ar[0])
+        result_label = "Aborted";
+    else
+        result_label = "In Progress";
+
+    time_t now     = time(NULL);
+    int    duration = (int)(now - mission_start_time);
+    int    total = moves_left_turn + moves_right_turn + moves_straight + moves_reverse;
+
+    char start_buf[32], end_buf[32];
+    snprintf(start_buf, sizeof(start_buf), "%ld", (long)mission_start_time);
+    snprintf(end_buf, sizeof(end_buf), "%ld", (long)now);
+
+    char dist_buf[32];
+    snprintf(dist_buf, sizeof(dist_buf), "%.2f", (double)total * 0.39);
+
+    if (redis_ctx) {
+        char key[256];
+        snprintf(key, sizeof(key), "mission:%s:summary", session_id);
+        redisCommand(redis_ctx,
+            "HSET %s robot_id %s mission_type %s start_time %s end_time %s "
+            "moves_left_turn %d moves_right_turn %d moves_straight %d moves_reverse %d "
+            "moves_total %d distance_traveled %s duration_seconds %d "
+            "mission_result %s abort_reason %s",
+            key,
+            "keyboard-player", "explore",
+            start_buf, end_buf,
+            moves_left_turn, moves_right_turn, moves_straight, moves_reverse,
+            total, dist_buf, duration,
+            result_label, ar);
+    }
+
+    post_mission_summary_to_web(result_label, ar, start_buf, end_buf, total, dist_buf, duration);
+}
+
+static void launch_mission_dashboard(void) {
+    printf("\n--- Launching Mission Dashboard ---\n");
+    flush_mission_summary(mission_won, "");
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        execl("./missions/mission_dashboard", "mission_dashboard", session_id, NULL);
+        perror("execl failed");
+        _exit(1);
+    } else if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        printf("--- Mission Dashboard closed ---\n");
+    }
+}
+
+/** Window close / Esc: snapshot mission for web dashboard. */
+static void flush_mission_on_game_exit(void) {
+    if (move_sequence == 0 && !mission_won)
+        return;
+    if (mission_won)
+        flush_mission_summary(true, "");
+    else
+        flush_mission_summary(false, "user exited");
 }
 
 static void parse_plan_response(const char *json_body) {
@@ -385,6 +460,89 @@ static void send_maze_grid(void) {
     free(resp.data);
     free(json_str);
     cJSON_Delete(root);
+}
+
+/* -------------------------------------------------------
+   Re-plan from current position (synchronous).
+   Called after a manual move to generate a new A* path
+   from the robot's current position to the goal.
+------------------------------------------------------- */
+static void replan_from_position(int px, int py) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "from_x", px);
+    cJSON_AddNumberToObject(root, "from_y", py);
+    char *json_str = cJSON_PrintUnformatted(root);
+
+    char url[512];
+    snprintf(url, sizeof(url), "%s/%s/solve",
+             "https://10.170.8.109:8447/maze", session_id);
+
+    printf("--- Re-planning from (%d, %d) ---\n", px, py);
+    fflush(stdout);
+
+    struct response_buf resp = { .data = NULL, .size = 0 };
+
+    CURL *curl = curl_easy_init();
+    if (curl) {
+        struct curl_slist *headers = NULL;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+
+        curl_easy_setopt(curl, CURLOPT_URL,            url);
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS,     json_str);
+        curl_easy_setopt(curl, CURLOPT_SSLCERT,        mtls_client_cert);
+        curl_easy_setopt(curl, CURLOPT_SSLCERTTYPE,    "PEM");
+        curl_easy_setopt(curl, CURLOPT_SSLKEY,         mtls_client_key);
+        curl_easy_setopt(curl, CURLOPT_SSLKEYTYPE,     "PEM");
+        curl_easy_setopt(curl, CURLOPT_CAINFO,         mtls_ca_file);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT,        30L);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,  capture_response);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA,      &resp);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res == CURLE_OK && resp.data) {
+            printf("-> Re-plan          [OK]\n");
+            parse_plan_response(resp.data);
+        } else {
+            printf("-> Re-plan          [FAIL] %s\n", curl_easy_strerror(res));
+        }
+        fflush(stdout);
+
+        curl_slist_free_all(headers);
+        curl_easy_cleanup(curl);
+    }
+
+    free(resp.data);
+    free(json_str);
+    cJSON_Delete(root);
+}
+
+/** Map keyboard delta to plan step label. */
+static const char *move_dir_name(int dx, int dy) {
+    if (dx == 0 && dy == -1) return "UP";
+    if (dx == 0 && dy ==  1) return "DOWN";
+    if (dx == -1 && dy == 0) return "LEFT";
+    if (dx ==  1 && dy == 0) return "RIGHT";
+    return "";
+}
+
+/**
+ * If the player's manual move matches the next AI plan step, advance plan index (no network).
+ * Otherwise return false → caller should replan (plan mismatch or no plan left).
+ */
+static bool manual_move_matches_plan(int dx, int dy) {
+    if (ai_plan_len <= 0 || ai_plan_index >= ai_plan_len)
+        return false;
+    const char *expect = ai_plan[ai_plan_index];
+    const char *actual = move_dir_name(dx, dy);
+    if (!actual[0] || strcmp(expect, actual) != 0)
+        return false;
+    ai_plan_index++;
+    return true;
 }
 
 /* -------------------------------------------------------
@@ -546,7 +704,6 @@ static bool try_move(int *px, int *py, int dx, int dy) {
     else if (dy == -1) moves_straight++;
     else if (dy ==  1) moves_reverse++;
 
-    write_mission_to_redis(false, "");
     send_json_telemetry("player_move", *px, *py, false);
     send_mission_to_ai_server();
 
@@ -556,6 +713,10 @@ static bool try_move(int *px, int *py, int dx, int dy) {
 static void regenerate(int *px, int *py, SDL_Window *win) {
   maze_init();
   maze_generate(0, 0);
+  generate_session_id(session_id, sizeof(session_id));
+  printf("New mission session: %s\n", session_id);
+  fflush(stdout);
+
   *px = 0;
   *py = 0;
   move_sequence = 0;
@@ -658,17 +819,20 @@ int main(void) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
 
-            if (e.type == SDL_QUIT)
+            if (e.type == SDL_QUIT) {
+                flush_mission_on_game_exit();
                 running = false;
+            }
 
             if (e.type == SDL_KEYDOWN) {
                 if (e.key.keysym.sym == SDLK_ESCAPE) {
-                    write_mission_to_redis(mission_won, "user exited");
+                    flush_mission_on_game_exit();
                     running = false;
                 }
 
             if (e.key.keysym.sym == SDLK_r) {
-              write_mission_to_redis(mission_won, "user reset");
+              if (move_sequence > 0 || mission_won)
+                  flush_mission_summary(false, "user reset");
               won = false;
               mission_won = false;
               regenerate(&px, &py, win);
@@ -703,19 +867,23 @@ int main(void) {
                     e.key.keysym.sym == SDLK_LEFT  ||
                     e.key.keysym.sym == SDLK_RIGHT
                 )) {
-                    try_move(
-                        &px, &py,
-                        (e.key.keysym.sym == SDLK_RIGHT) - (e.key.keysym.sym == SDLK_LEFT),
-                        (e.key.keysym.sym == SDLK_DOWN)  - (e.key.keysym.sym == SDLK_UP)
-                    );
+                    int old_px = px, old_py = py;
+                    int mdx = (e.key.keysym.sym == SDLK_RIGHT) - (e.key.keysym.sym == SDLK_LEFT);
+                    int mdy = (e.key.keysym.sym == SDLK_DOWN)  - (e.key.keysym.sym == SDLK_UP);
+                    try_move(&px, &py, mdx, mdy);
 
                     if (px == MAZE_W - 1 && py == MAZE_H - 1) {
                         won         = true;
                         mission_won = true;
                         SDL_SetWindowTitle(win, "You win!");
-                        write_mission_to_redis(true, "");
+                        flush_mission_summary(true, "");
                         send_json_telemetry("player_won", px, py, true);
                         send_mission_to_ai_server();
+                    } else if (px != old_px || py != old_py) {
+                        /* Re-plan only on HTTPS when the move diverges from the stored plan
+                           (or there is no remaining plan); following the plan advances index locally. */
+                        if (!manual_move_matches_plan(mdx, mdy))
+                            replan_from_position(px, py);
                     }
                 }
             }
@@ -740,7 +908,7 @@ int main(void) {
                         mission_won = true;
                         ai_autoplay = false;
                         SDL_SetWindowTitle(win, "AI solved the maze! R=regen");
-                        write_mission_to_redis(true, "");
+                        flush_mission_summary(true, "");
                         send_json_telemetry("ai_won", px, py, true);
                         send_mission_to_ai_server();
                     }

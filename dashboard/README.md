@@ -1,7 +1,8 @@
 # Mission Dashboard Mockups
 
-UI mockups for the in-game mission dashboard triggered by pressing **L** (Left Trigger) during gameplay.
+Website for the in-game mission dashboard. Updated by pressing **L** (Left Trigger) during gameplay.
 
+![Mission Dashboard](mission_dashboard.png)
 ---
 
 ## GameHat Controller — Local Redis Only
@@ -12,8 +13,8 @@ These mockups show the dashboard running on the **Raspberry Pi Game HAT** using 
 
 | Mockup | State | Description |
 |--------|-------|-------------|
-| ![In Progress](mission_dashboard_1.png) | **In Progress** | Mission is active. End Time shows "—", result is IN PROGRESS. |
-| ![Success](mission_dashboard_2.png) | **Success** | Mission complete. End Time is filled in, result is SUCCESS. |
+| ![In Progress](mission_dashboard_template_1.png) | **In Progress** | Mission is active. End Time shows "—", result is IN PROGRESS. |
+| ![Success](mission_dashboard_template_2.png) | **Success** | Mission complete. End Time is filled in, result is SUCCESS. |
 
 **Panels displayed:**
 - Mission Identity (ID, Robot, Type)
@@ -34,8 +35,8 @@ These mockups show the expanded dashboard that also pulls **live move telemetry 
 
 | Mockup | State | Description |
 |--------|-------|-------------|
-| ![In Progress](mission_dashboard_3.png) | **In Progress** | Full dashboard with live telemetry table, stats bar, and mission history. |
-| ![Success](mission_dashboard_4.png) | **Success** | Full dashboard showing completed mission with End Time filled in. |
+| ![In Progress](mission_dashboard_template_3.png) | **In Progress** | Full dashboard with live telemetry table, stats bar, and mission history. |
+| ![Success](mission_dashboard_template_4.png) | **Success** | Full dashboard showing completed mission with End Time filled in. |
 
 **Additional panels (over the GameHat version):**
 - Summary stat cards (Total Moves, Distance, Duration, Missions Run, Success Rate, Robots Online)

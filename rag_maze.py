@@ -29,6 +29,15 @@ MAX_DISTANCE = 300.0
 RESULT_MAP = {"success": 1.0, "in_progress": 0.5, "failed": 0.0, "aborted": 0.0}
 
 
+def _normalize_mission_result(val: str) -> str:
+    """Canonical key: success, in_progress, failed, aborted (handles Title Case from Redis)."""
+    return str(val or "").strip().lower().replace(" ", "_")
+
+
+def _result_dimension(val) -> float:
+    return RESULT_MAP.get(_normalize_mission_result(str(val)), 0.0)
+
+
 # ── Vectorization ────────────────────────────────────────────────────
 
 def mission_to_vector(summary: Dict) -> np.ndarray:
@@ -52,7 +61,7 @@ def mission_to_vector(summary: Dict) -> np.ndarray:
         float(summary.get("moves_reverse", 0))    / total,
         min(float(summary.get("duration_seconds", 0)) / MAX_DURATION, 1.0),
         min(float(summary.get("distance_traveled", 0)) / MAX_DISTANCE, 1.0),
-        RESULT_MAP.get(str(summary.get("mission_result", "")), 0.0),
+        _result_dimension(summary.get("mission_result", "")),
     ], dtype=np.float32)
     return vec
 
@@ -289,8 +298,14 @@ def build_rag_context(
             f"duration={duration}s, similarity={score:.3f}"
         )
 
-    successful = [s for _, _, s in similar_missions if s.get("mission_result") == "success"]
-    failed = [s for _, _, s in similar_missions if s.get("mission_result") in ("failed", "aborted")]
+    successful = [
+        s for _, _, s in similar_missions
+        if _normalize_mission_result(str(s.get("mission_result", ""))) == "success"
+    ]
+    failed = [
+        s for _, _, s in similar_missions
+        if _normalize_mission_result(str(s.get("mission_result", ""))) in ("failed", "aborted")
+    ]
 
     if successful:
         avg_moves = sum(int(s.get("moves_total", 0)) for s in successful) / len(successful)

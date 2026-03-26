@@ -5,7 +5,8 @@ Graph cycle:
     executor ──(need_plan?)──> planner ──> executor ──> END
 
 The executor picks the next move from the stored plan.
-The planner produces a new plan via A* (and optionally asks an LLM via Ollama).
+The planner tries the LLM first; if the LLM plan is invalid or
+unavailable it falls back to A*.
 """
 
 from __future__ import annotations
@@ -121,9 +122,9 @@ def executor(state: MazeState) -> dict:
 def planner(state: MazeState) -> dict:
     """
     Produce a new plan.
-    1. Always try A* first (deterministic, guaranteed optimal).
-    2. Optionally ask the LLM for an alternative plan and validate it.
-    3. If LLM plan is invalid, fall back to A*.
+    1. Try the LLM first (with RAG context).
+    2. Validate the LLM plan — must be wall-legal and reach the goal.
+    3. If the LLM plan is invalid, unavailable, or stuck, fall back to A*.
     """
     x, y = state["x"], state["y"]
     gx, gy = state["goal_x"], state["goal_y"]
@@ -131,22 +132,11 @@ def planner(state: MazeState) -> dict:
     height = state["height"]
     cells = state["cells"]
 
-    astar_plan = astar(width, height, cells, (x, y), (gx, gy))
-
-    if astar_plan is None:
-        logger.warning("Planner: A* found no path from (%d,%d) to (%d,%d)", x, y, gx, gy)
-        return {
-            "plan": [],
-            "plan_index": 0,
-            "need_plan": False,
-            "action": "NO_PATH",
-            "reason": "A* found no path to goal",
-        }
-
-    chosen_plan = astar_plan
-    reason = f"A* plan: {len(astar_plan)} moves"
+    chosen_plan = None
+    reason = ""
     rag_context = _fetch_rag_context(state)
 
+    # ── Step 1: Try LLM ──────────────────────────────────────────────
     llm_state = {**state}
     if rag_context:
         llm_state["rag_context"] = rag_context
@@ -154,16 +144,30 @@ def planner(state: MazeState) -> dict:
     llm_plan = _try_llm_plan(llm_state)
     if llm_plan is not None:
         ok, msg = validate_plan(llm_plan, width, height, cells, x, y)
-        if ok:
-            _ends_at_goal = _check_plan_reaches_goal(llm_plan, x, y, gx, gy)
-            if _ends_at_goal:
-                chosen_plan = llm_plan
-                reason = f"LLM plan accepted: {len(llm_plan)} moves"
-                logger.info("Planner: LLM plan valid and reaches goal")
-            else:
-                logger.info("Planner: LLM plan valid but doesn't reach goal, using A*")
+        if ok and _check_plan_reaches_goal(llm_plan, x, y, gx, gy):
+            chosen_plan = llm_plan
+            reason = f"LLM plan accepted: {len(llm_plan)} moves"
+            logger.info("Planner: LLM plan valid and reaches goal")
         else:
-            logger.info("Planner: LLM plan invalid (%s), falling back to A*", msg)
+            fail = msg if not ok else "does not reach goal"
+            logger.info("Planner: LLM plan rejected (%s), falling back to A*", fail)
+
+    # ── Step 2: A* fallback ──────────────────────────────────────────
+    if chosen_plan is None:
+        astar_plan = astar(width, height, cells, (x, y), (gx, gy))
+        if astar_plan is not None:
+            chosen_plan = astar_plan
+            reason = f"A* fallback plan: {len(astar_plan)} moves"
+            logger.info("Planner: %s", reason)
+        else:
+            logger.warning("Planner: A* found no path from (%d,%d) to (%d,%d)", x, y, gx, gy)
+            return {
+                "plan": [],
+                "plan_index": 0,
+                "need_plan": False,
+                "action": "NO_PATH",
+                "reason": "No path to goal (A* and LLM both failed)",
+            }
 
     r = state.get("redis")
     sid = state.get("session_id")
@@ -273,7 +277,7 @@ def _fetch_rag_context(state: MazeState) -> Optional[str]:
         "moves_total":      len(history),
         "duration_seconds":  0,
         "distance_traveled": total * 0.39,
-        "mission_result":   "in_progress",
+        "mission_result":   "In Progress",
     }
 
     try:

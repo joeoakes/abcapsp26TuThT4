@@ -1,18 +1,26 @@
+# FOR LOCAL TESTING WITH NO MTLS
+# MTLS_REQUIRE_CLIENT=0 python maze_server.py
+
 """
 FastAPI server — receives maze data from the SDL2 client and exposes the
 A* / multi-agent solver.
 
 Endpoints:
-    POST  /maze                     receive full grid, store, auto-solve, return plan
-    GET   /maze/{session_id}/plan   retrieve the current plan for a session
-    GET   /maze/{session_id}/status full session state (position, plan, history …)
-    POST  /maze/{session_id}/solve  re-solve from current position
+    POST  /maze                          receive full grid, store, auto-solve, return plan
+    GET   /maze/{session_id}/plan        retrieve the current plan for a session
+    GET   /maze/{session_id}/status      full session state (position, plan, history …)
+    POST  /maze/{session_id}/solve       re-solve from current position
+    POST  /mission/{session_id}/summary  upsert mission hash for web dashboard (GameHat)
 
 Run (plain HTTP for local testing):
     uvicorn maze_server:app --host 0.0.0.0 --port 8447
 
 Run (mTLS for production — on AI server):
     python maze_server.py
+
+Local dashboard in a browser (HTTPS without client cert):
+    MTLS_REQUIRE_CLIENT=0 python maze_server.py
+    Then open https://127.0.0.1:8447/dashboard  (do not use 0.0.0.0 in the URL bar).
 """
 
 from __future__ import annotations
@@ -20,9 +28,11 @@ from __future__ import annotations
 import logging
 import os
 import ssl
-from typing import List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import maze_redis
@@ -39,6 +49,10 @@ SSL_CERT = os.getenv("SSL_CERT", "https/certs/server.crt")
 SSL_KEY  = os.getenv("SSL_KEY",  "https/certs/server.key")
 SSL_CA   = os.getenv("SSL_CA",   "https/certs/ca.crt")
 LISTEN_PORT = int(os.getenv("LISTEN_PORT", "8447"))
+# When false, HTTPS accepts connections without a client cert (local dev / browser only).
+_MTLS_REQUIRE_CLIENT = os.getenv("MTLS_REQUIRE_CLIENT", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 
 app = FastAPI(title="Maze A* Solver", version="1.0.0")
 
@@ -91,6 +105,23 @@ class StatusResponse(BaseModel):
     history: List[str]
     visited_count: int
     maze_sig: str
+
+
+class MissionSummaryPayload(BaseModel):
+    """Mission hash written by the GameHat client (L, regen, or exit)."""
+    robot_id: str = "keyboard-player"
+    mission_type: str = "explore"
+    start_time: str
+    end_time: str
+    moves_left_turn: int = 0
+    moves_right_turn: int = 0
+    moves_straight: int = 0
+    moves_reverse: int = 0
+    moves_total: int = 0
+    distance_traveled: str = "0.00"
+    duration_seconds: int = 0
+    mission_result: str
+    abort_reason: str = ""
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -181,7 +212,7 @@ def get_status(session_id: str):
 def solve_from_position(session_id: str, body: SolveRequest = SolveRequest()):
     """
     Re-solve the maze from a given (or current) position.
-    Useful if the robot deviated from the plan.
+    Uses the full agent pipeline (LLM-first, A* fallback).
     """
     r = _redis()
     maze = maze_redis.load_maze(r, session_id)
@@ -194,12 +225,29 @@ def solve_from_position(session_id: str, body: SolveRequest = SolveRequest()):
         sx, sy = maze_redis.current_position(r, session_id)
 
     gx, gy = maze["goal_x"], maze["goal_y"]
-    plan = astar(maze["width"], maze["height"], maze["cells"], (sx, sy), (gx, gy))
 
-    if plan is None:
+    if sx == gx and sy == gy:
+        return PlanResponse(
+            session_id=session_id,
+            plan=[],
+            plan_length=0,
+            start=[sx, sy],
+            goal=[gx, gy],
+        )
+
+    result = solve_maze(
+        width=maze["width"],
+        height=maze["height"],
+        cells=maze["cells"],
+        start=(sx, sy),
+        goal=(gx, gy),
+        session_id=session_id,
+        redis_conn=r,
+    )
+
+    plan = result.get("plan", [])
+    if not plan:
         raise HTTPException(status_code=422, detail="No path found from current position")
-
-    maze_redis.store_plan(r, session_id, plan)
 
     return PlanResponse(
         session_id=session_id,
@@ -220,14 +268,75 @@ def health():
         return {"status": "degraded", "redis": str(e)}
 
 
+# ── Dashboard endpoints ──────────────────────────────────────────────
+
+DASHBOARD_HTML = Path(__file__).resolve().parent / "dashboard" / "dashboard.html"
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def serve_dashboard():
+    """Serve the mission dashboard web page."""
+    if not DASHBOARD_HTML.exists():
+        raise HTTPException(status_code=404, detail="dashboard.html not found")
+    return HTMLResponse(content=DASHBOARD_HTML.read_text(), status_code=200)
+
+
+@app.get("/sessions")
+def list_sessions():
+    """Return mission summaries for sessions whose id starts with ``team4``."""
+    r = _redis()
+    sessions: List[Dict[str, Any]] = []
+    for key in r.scan_iter(match="mission:*:summary"):
+        sid = key.split(":")[1]
+        if not sid.startswith("team4"):
+            continue
+        data = r.hgetall(f"mission:{sid}:summary")
+        sessions.append({
+            "session_id": sid,
+            "robot_id": data.get("robot_id", ""),
+            "mission_result": data.get("mission_result", ""),
+            "moves_total": int(data.get("moves_total", 0)),
+            "duration_seconds": int(data.get("duration_seconds", 0)),
+        })
+    sessions.sort(key=lambda s: s["session_id"], reverse=True)
+    return {"sessions": sessions}
+
+
+@app.get("/mission/{session_id}")
+def get_mission(session_id: str):
+    """Return the mission summary hash from Redis."""
+    r = _redis()
+    key = f"mission:{session_id}:summary"
+    data = r.hgetall(key)
+    if not data:
+        raise HTTPException(status_code=404, detail="Mission not found")
+    return {"session_id": session_id, **data}
+
+
+@app.post("/mission/{session_id}/summary")
+def upsert_mission_summary(session_id: str, body: MissionSummaryPayload):
+    """Store mission summary on the AI server Redis (web dashboard reads this)."""
+    r = _redis()
+    key = f"mission:{session_id}:summary"
+    flat = body.model_dump()
+    r.hset(key, mapping={k: str(v) for k, v in flat.items()})
+    return {"ok": True, "session_id": session_id}
+
+
 if __name__ == "__main__":
     import uvicorn
 
     use_ssl = all(os.path.exists(p) for p in (SSL_CERT, SSL_KEY, SSL_CA))
 
     if use_ssl:
+        # CERT_OPTIONAL still *requests* a client cert and triggers browser picker;
+        # CERT_NONE does not request one (HTTPS only, for browsers / local dev).
+        cert_req = ssl.CERT_REQUIRED if _MTLS_REQUIRE_CLIENT else ssl.CERT_NONE
         print(f"Starting mTLS server on port {LISTEN_PORT}")
         print(f"  cert: {SSL_CERT}  key: {SSL_KEY}  ca: {SSL_CA}")
+        print(
+            f"  client cert: {'REQUIRED' if _MTLS_REQUIRE_CLIENT else 'not requested (MTLS_REQUIRE_CLIENT=0; use https://127.0.0.1:{LISTEN_PORT}/dashboard)'}"
+        )
         uvicorn.run(
             app,
             host="0.0.0.0",
@@ -235,7 +344,7 @@ if __name__ == "__main__":
             ssl_certfile=SSL_CERT,
             ssl_keyfile=SSL_KEY,
             ssl_ca_certs=SSL_CA,
-            ssl_cert_reqs=ssl.CERT_REQUIRED,
+            ssl_cert_reqs=cert_req,
         )
     else:
         print(f"Starting HTTP server on port {LISTEN_PORT} (no certs found)")

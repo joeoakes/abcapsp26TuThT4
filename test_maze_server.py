@@ -189,6 +189,83 @@ def test_solve_not_found():
     assert resp.status_code == 404
 
 
+# ── Dashboard endpoints ──────────────────────────────────────────────
+
+def test_dashboard_html():
+    resp = client.get("/dashboard")
+    assert resp.status_code == 200
+    assert "Mission Dashboard" in resp.text
+
+
+def test_sessions_list():
+    resp = client.get("/sessions")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "sessions" in body
+    assert isinstance(body["sessions"], list)
+
+
+def test_sessions_team4_prefix_only():
+    r = maze_redis.connect()
+    tid = f"team4-test-{uuid.uuid4().hex[:8]}"
+    oid = f"other-{uuid.uuid4().hex[:8]}"
+    r.hset(f"mission:{tid}:summary", mapping={"mission_result": "In Progress", "moves_total": "1"})
+    r.hset(f"mission:{oid}:summary", mapping={"mission_result": "Success", "moves_total": "2"})
+    resp = client.get("/sessions")
+    assert resp.status_code == 200
+    ids = {s["session_id"] for s in resp.json()["sessions"]}
+    assert tid in ids
+    assert oid not in ids
+    r.delete(f"mission:{tid}:summary", f"mission:{oid}:summary")
+
+
+def test_mission_not_found():
+    resp = client.get("/mission/nonexistent_session")
+    assert resp.status_code == 404
+
+
+def test_mission_found():
+    r = maze_redis.connect()
+    sid = _sid()
+    r.hset(f"mission:{sid}:summary", mapping={
+        "robot_id": "test-bot",
+        "mission_type": "explore",
+        "moves_total": "10",
+        "duration_seconds": "42",
+        "mission_result": "Success",
+    })
+    resp = client.get(f"/mission/{sid}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["robot_id"] == "test-bot"
+    assert body["moves_total"] == "10"
+    r.delete(f"mission:{sid}:summary")
+
+
+def test_post_mission_summary():
+    sid = f"team4-test-{uuid.uuid4().hex[:8]}"
+    resp = client.post(f"/mission/{sid}/summary", json={
+        "robot_id": "keyboard-player",
+        "mission_type": "explore",
+        "start_time": "1000",
+        "end_time": "2000",
+        "moves_left_turn": 1,
+        "moves_right_turn": 2,
+        "moves_straight": 3,
+        "moves_reverse": 0,
+        "moves_total": 6,
+        "distance_traveled": "2.34",
+        "duration_seconds": 50,
+        "mission_result": "Aborted",
+        "abort_reason": "user reset",
+    })
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    g = client.get(f"/mission/{sid}")
+    assert g.json()["mission_result"] == "Aborted"
+    maze_redis.connect().delete(f"mission:{sid}:summary")
+
+
 if __name__ == "__main__":
     import sys
 

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mission Dashboard</title>
+<style>
+  :root {
+    --bg: #0e1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --yellow: #d29922;
+    --red: #f85149;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 24px;
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 1.6rem;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 0.9rem; }
+  .controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+  select, button {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  select:focus, button:focus { outline: 2px solid var(--accent); }
+  button:hover { border-color: var(--accent); }
+  .badge {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .badge-success { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge-progress { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .badge-fail { background: rgba(248,81,73,0.15); color: var(--red); }
+  .badge-aborted { background: rgba(248,81,73,0.12); color: #f0883e; }
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  .stat-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+  }
+  .stat-label { color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat-value { font-size: 1.8rem; font-weight: 700; margin-top: 4px; }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 28px;
+  }
+  @media (max-width: 700px) { .detail-grid { grid-template-columns: 1fr; } }
+  .detail-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+  }
+  .detail-card h3 {
+    font-size: 0.85rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .kv { display: flex; justify-content: space-between; padding: 6px 0; }
+  .kv .k { color: var(--muted); font-size: 0.85rem; }
+  .kv .v { font-weight: 600; font-size: 0.85rem; }
+  .dpad {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-rows: 1fr 1fr 1fr;
+    gap: 6px;
+    max-width: 180px;
+    margin: 12px auto 0;
+  }
+  .dpad-cell {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    text-align: center;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+  .dpad-cell.active { border-color: var(--accent); }
+  .dpad-center { background: transparent; border: none; }
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--muted);
+  }
+  .empty-state p { margin-top: 8px; }
+  .refresh-note { color: var(--muted); font-size: 0.8rem; }
+  .session-list {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .session-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .session-row:last-child { border-bottom: none; }
+  .session-row:hover { background: rgba(88,166,255,0.06); }
+  .session-row.selected { background: rgba(88,166,255,0.1); border-left: 3px solid var(--accent); }
+  .error-msg { color: var(--red); padding: 20px; text-align: center; }
+  #autoRefresh { accent-color: var(--accent); margin-right: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Mission Dashboard</h1>
+<p class="subtitle">Mission statistics on the AI server Redis (session id prefix <code>team4</code> only). The game publishes when you press <strong>L</strong> (dashboard), <strong>R</strong> (Aborted / user reset), or exit (<strong>Esc</strong> / close window).</p>
+
+<div class="controls">
+  <button id="btnRefreshSessions" onclick="loadSessions()">Refresh Sessions</button>
+  <select id="sessionSelect" onchange="onSessionChange()">
+    <option value="">-- select session --</option>
+  </select>
+  <button id="btnRefreshMission" onclick="loadMission()" disabled>Refresh Mission</button>
+  <label class="refresh-note">
+    <input type="checkbox" id="autoRefresh" onchange="toggleAutoRefresh()"> Auto-refresh (5s)
+  </label>
+</div>
+
+<div id="content">
+  <div class="empty-state">
+    <h2>No session selected</h2>
+    <p>Click "Refresh Sessions" and select a session from the dropdown.</p>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin;
+let autoTimer = null;
+
+async function loadSessions() {
+  const sel = document.getElementById('sessionSelect');
+  try {
+    const res = await fetch(API + '/sessions');
+    const data = await res.json();
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">-- select session --</option>';
+    for (const s of data.sessions) {
+      const opt = document.createElement('option');
+      opt.value = s.session_id;
+      const mr = normResult(s.mission_result);
+      const badge = mr === 'success' ? ' [OK]' :
+                    mr === 'inprogress' ? ' [...]' :
+                    mr === 'aborted' ? ' [ABT]' : '';
+      opt.textContent = s.session_id + badge + ' (' + s.moves_total + ' moves)';
+      sel.appendChild(opt);
+    }
+    if (prev) sel.value = prev;
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      '<div class="error-msg">Failed to load sessions: ' + e.message + '</div>';
+  }
+}
+
+function onSessionChange() {
+  const v = document.getElementById('sessionSelect').value;
+  document.getElementById('btnRefreshMission').disabled = !v;
+  if (v) loadMission();
+}
+
+async function loadMission() {
+  const sid = document.getElementById('sessionSelect').value;
+  if (!sid) return;
+  try {
+    const res = await fetch(API + '/mission/' + sid);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const m = await res.json();
+    renderMission(m);
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      '<div class="error-msg">Failed to load mission: ' + e.message + '</div>';
+  }
+}
+
+function fmtTime(unix) {
+  if (!unix || unix === '0') return '\u2014';
+  const d = new Date(parseInt(unix) * 1000);
+  return d.toLocaleString();
+}
+
+/** Normalize mission_result for comparisons (handles Title Case and legacy snake_case). */
+function normResult(raw) {
+  return String(raw || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+function resultBadge(r) {
+  const k = normResult(r);
+  if (k === 'success') return '<span class="badge badge-success">Success</span>';
+  if (k === 'inprogress' || k === 'in_progress') return '<span class="badge badge-progress">In Progress</span>';
+  if (k === 'aborted') return '<span class="badge badge-aborted">Aborted</span>';
+  return '<span class="badge badge-fail">' + escapeHtml(String(r || 'Unknown')) + '</span>';
+}
+
+function escapeHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderMission(m) {
+  const total = parseInt(m.moves_total || 0);
+  const dur   = parseInt(m.duration_seconds || 0);
+  const dist  = parseFloat(m.distance_traveled || 0).toFixed(2);
+  const left  = parseInt(m.moves_left_turn || 0);
+  const right = parseInt(m.moves_right_turn || 0);
+  const up    = parseInt(m.moves_straight || 0);
+  const down  = parseInt(m.moves_reverse || 0);
+
+  document.getElementById('content').innerHTML = `
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-label">Total Moves</div>
+        <div class="stat-value">${total}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Duration</div>
+        <div class="stat-value">${dur}<span style="font-size:0.9rem;color:var(--muted)">s</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Distance</div>
+        <div class="stat-value">${dist}<span style="font-size:0.9rem;color:var(--muted)">m</span></div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Status</div>
+        <div class="stat-value" style="font-size:1rem;margin-top:10px">${resultBadge(m.mission_result)}</div>
+      </div>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-card">
+        <h3>Mission Identity</h3>
+        <div class="kv"><span class="k">Session ID</span><span class="v">${m.session_id}</span></div>
+        <div class="kv"><span class="k">Robot ID</span><span class="v">${m.robot_id || '\u2014'}</span></div>
+        <div class="kv"><span class="k">Mission Type</span><span class="v">${m.mission_type || '\u2014'}</span></div>
+        <div class="kv"><span class="k">Result</span><span class="v">${resultBadge(m.mission_result)}</span></div>
+        ${m.abort_reason ? `<div class="kv"><span class="k">Abort Reason</span><span class="v">${m.abort_reason}</span></div>` : ''}
+      </div>
+      <div class="detail-card">
+        <h3>Timing</h3>
+        <div class="kv"><span class="k">Start Time</span><span class="v">${fmtTime(m.start_time)}</span></div>
+        <div class="kv"><span class="k">End Time</span><span class="v">${fmtTime(m.end_time)}</span></div>
+        <div class="kv"><span class="k">Duration</span><span class="v">${dur} seconds</span></div>
+      </div>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-card">
+        <h3>Movement Breakdown</h3>
+        <div class="dpad">
+          <div class="dpad-cell"></div>
+          <div class="dpad-cell active">\u2191 ${up}</div>
+          <div class="dpad-cell"></div>
+          <div class="dpad-cell active">\u2190 ${left}</div>
+          <div class="dpad-cell dpad-center">${total}</div>
+          <div class="dpad-cell active">\u2192 ${right}</div>
+          <div class="dpad-cell"></div>
+          <div class="dpad-cell active">\u2193 ${down}</div>
+          <div class="dpad-cell"></div>
+        </div>
+      </div>
+      <div class="detail-card">
+        <h3>Distance &amp; Totals</h3>
+        <div class="kv"><span class="k">Total Moves</span><span class="v">${total}</span></div>
+        <div class="kv"><span class="k">Distance Traveled</span><span class="v">${dist} m</span></div>
+        <div class="kv"><span class="k">Avg Speed</span><span class="v">${dur > 0 ? (parseFloat(dist) / dur).toFixed(3) : '\u2014'} m/s</span></div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleAutoRefresh() {
+  if (document.getElementById('autoRefresh').checked) {
+    autoTimer = setInterval(() => {
+      const sid = document.getElementById('sessionSelect').value;
+      if (sid) loadMission();
+    }, 5000);
+  } else {
+    clearInterval(autoTimer);
+    autoTimer = null;
+  }
+}
+
+loadSessions();
+</script>
+</body>
+</html>
