@@ -1,41 +1,44 @@
-# Virtual environments
-venv/
-.venv/
-apriltag/venv/
-
-# Environment variables
-env/
-ENV/
-
-# Python cache
-__pycache__/
-
-# Python bytecode
-*.pyc
+# ---- OS / Editor ----
 .DS_Store
 .vscode/
 
-# Build artifacts / executables
-https/maze_https_mongo
-https/maze_https_redis
-https/maze_https_telemetry
-https/maze_https_ros2_bridge
-maze/maze_sdl2_json_send
-maze/maze_sdl2
-maze/maze_sdl2_final_send
-maze/maze_game
-maze/missions/mission_dashboard
+# ---- Python ----
+venv/
+.venv/
+env/
+ENV/
+*.pyc
+*.pyo
+__pycache__/
+.pytest_cache/
+
+# ---- C/C++ build artifacts ----
 *.o
 *.a
+*.so
+*.out
 
-# mTLS certificates — never commit private keys; regenerate with gen_mtls_certs.sh
-https/certs/*.key
-https/certs/ca.key
-https/certs/*.crt
-https/certs/ca.crt
-https/certs/*.csr
-https/certs/ca.srl
+# ---- Local binaries (robot/security) ----
+infra/security/maze_https_mongo
+infra/security/maze_https_redis
+infra/security/maze_https_telemetry
+infra/security/maze_https_ros2_bridge
+src/robot/maze/maze_sdl2_json_send
+src/robot/maze/maze_sdl2
+src/robot/maze/maze_sdl2_final_send
+src/robot/maze/maze_game
+src/robot/maze/missions/mission_dashboard
 
-# Bundles & archives with secrets
+# ---- Security artifacts (never commit private keys) ----
+infra/security/certs/*.key
+infra/security/certs/ca.key
+infra/security/certs/*.csr
+infra/security/certs/ca.srl
+infra/security/certs/*.p12
+
+# Optional: keep certs out of git by default
+# infra/security/certs/*.crt
+
+# ---- Archives / bundles ----
 certs_bundle.tar.gz
 *.tar.gz
