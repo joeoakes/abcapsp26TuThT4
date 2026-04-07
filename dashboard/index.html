@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="obsidian">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mission Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/dashboard/css/main.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <section class="title-wrap">
+        <h1 class="title">Mission Dashboard</h1>
+        <p class="subtitle">
+          Mission statistics on the AI server Redis (session id prefix <code>team4</code> only).
+          The game publishes when you press <strong>L</strong>, <strong>R</strong>, or exit.
+        </p>
+      </section>
+
+      <aside class="right-hud">
+        <div class="mode-row">
+          <label for="modeSelect">Terminal Mode Selector</label>
+          <select id="modeSelect" class="mode-select">
+            <option value="obsidian">Obsidian</option>
+            <option value="polar">Polar</option>
+            <option value="monolith">Monolith</option>
+          </select>
+        </div>
+        <div class="resource-hud">
+          <div class="resource-row">
+            <span class="resource-label">CPU/01</span>
+            <div class="resource-track"><div class="resource-fill" id="cpuBar"></div></div>
+          </div>
+          <div class="resource-row">
+            <span class="resource-label">RAM/02</span>
+            <div class="resource-track"><div class="resource-fill ram" id="ramBar"></div></div>
+          </div>
+          <div class="resource-row">
+            <span class="resource-label">CACHE/03</span>
+            <div class="resource-track"><div class="resource-fill cache" id="cacheBar"></div></div>
+          </div>
+        </div>
+      </aside>
+    </header>
+
+    <section class="controls">
+      <button id="btnRefreshSessions" class="cut-btn">Refresh Sessions</button>
+      <select id="sessionSelect" class="session-select">
+        <option value="">-- select session --</option>
+      </select>
+      <button id="btnRefreshMission" class="cut-btn" disabled>Refresh Mission</button>
+      <label class="refresh-note">
+        <input type="checkbox" id="autoRefresh">Auto-refresh (5s)
+      </label>
+    </section>
+
+    <main id="content">
+      <div class="empty-state">
+        <h2>No session selected</h2>
+        <p>Refresh sessions and choose one to activate mission telemetry.</p>
+      </div>
+    </main>
+
+    <footer class="footer-row">
+      <div class="latency-ticker" id="latencyTicker">Server: Redis-v4.2 | Latency: 12ms | Handshake: SECURE.</div>
+      <div class="fingerprint" id="sessionFingerprint">0x00-00-00-00-00-00</div>
+    </footer>
+  </div>
+
+  <script type="module" src="/dashboard/js/ui-controller.js"></script>
+</body>
+</html>

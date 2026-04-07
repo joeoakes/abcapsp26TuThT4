@@ -32,7 +32,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import maze_redis
@@ -55,6 +56,11 @@ _MTLS_REQUIRE_CLIENT = os.getenv("MTLS_REQUIRE_CLIENT", "1").strip().lower() not
 )
 
 app = FastAPI(title="Maze A* Solver", version="1.0.0")
+
+DASHBOARD_DIR = Path(__file__).resolve().parent / "dashboard"
+if DASHBOARD_DIR.exists():
+    # Serve dashboard static assets and ES modules from /dashboard/*
+    app.mount("/dashboard", StaticFiles(directory=DASHBOARD_DIR, html=True), name="dashboard")
 
 _redis_conn = None
 
@@ -270,15 +276,13 @@ def health():
 
 # ── Dashboard endpoints ──────────────────────────────────────────────
 
-DASHBOARD_HTML = Path(__file__).resolve().parent / "dashboard" / "dashboard.html"
 
-
-@app.get("/dashboard", response_class=HTMLResponse)
+@app.get("/dashboard")
 def serve_dashboard():
-    """Serve the mission dashboard web page."""
-    if not DASHBOARD_HTML.exists():
-        raise HTTPException(status_code=404, detail="dashboard.html not found")
-    return HTMLResponse(content=DASHBOARD_HTML.read_text(), status_code=200)
+    """Route /dashboard to /dashboard/ so StaticFiles serves index.html."""
+    if not DASHBOARD_DIR.exists():
+        raise HTTPException(status_code=404, detail="dashboard directory not found")
+    return RedirectResponse(url="/dashboard/", status_code=307)
 
 
 @app.get("/sessions")
