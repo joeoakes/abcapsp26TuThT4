@@ -1,45 +1,78 @@
-# Mission Dashboard Mockups
+# Mission Dashboard (Modular Architecture)
 
-Website for the in-game mission dashboard. Updated by pressing **L** (Left Trigger) during gameplay.
+The dashboard has been refactored into a decoupled, high-performance front-end stack with strict separation between:
 
-![Mission Dashboard](mission_dashboard.png)
----
+- **Data Logic** (network and payload normalization)
+- **UI Rendering** (DOM updates and visual widgets)
+- **Style States** (theme variables and theme persistence)
 
-## GameHat Controller — Local Redis Only
+## Directory Structure
 
-These mockups show the dashboard running on the **Raspberry Pi Game HAT** using only **local Redis** (`127.0.0.1:6379`) as the data source. No network connection to MongoDB is required.
+```text
+dashboard/
+  index.html
+  css/
+    main.css
+  js/
+    api.js
+    ui-controller.js
+    theme-engine.js
+```
 
-**Data source:** `mission:{session_id}:summary` Redis hash
+## File Responsibilities
 
-| Mockup | State | Description |
-|--------|-------|-------------|
-| ![In Progress](mission_dashboard_template_1.png) | **In Progress** | Mission is active. End Time shows "—", result is IN PROGRESS. |
-| ![Success](mission_dashboard_template_2.png) | **Success** | Mission complete. End Time is filled in, result is SUCCESS. |
+### `index.html` (Skeleton)
 
-**Panels displayed:**
-- Mission Identity (ID, Robot, Type)
-- Mission Status badge
-- Timing (Start, End, Duration)
-- Movement Breakdown (D-pad with directional counts)
-- Distance
+- Contains only semantic layout containers and ID hooks.
+- No inline styles.
+- No inline scripts.
+- Loads:
+  - `/dashboard/css/main.css`
+  - `/dashboard/js/ui-controller.js` (ES module entrypoint)
 
----
+### `css/main.css` (Design System)
 
-## Full Dashboard — Local Redis + MongoDB
+- Centralized CSS variable tokens for all visual surfaces.
+- Theme states implemented via:
+  - `html[data-theme="obsidian"]`
+  - `html[data-theme="polar"]`
+  - `html[data-theme="monolith"]`
+- All colors, borders, and panel treatments come from variables.
 
-These mockups show the expanded dashboard that also pulls **live move telemetry from MongoDB** (`10.170.8.101:8446`) in addition to local Redis. Includes per-move position tracking, summary stats, and mission history.
+### `js/api.js` (Data Engine)
 
-**Data sources:**
-- `mission:{session_id}:summary` Redis hash (mission stats)
-- `maze.team4ttmoves` MongoDB collection (per-move telemetry with X, Y positions)
+- Pure fetch layer for server data.
+- Exposes `fetchSessions()` and `fetchMission(sessionId)`.
+- Returns normalized, clean JSON for UI use.
+- No DOM operations.
 
-| Mockup | State | Description |
-|--------|-------|-------------|
-| ![In Progress](mission_dashboard_template_3.png) | **In Progress** | Full dashboard with live telemetry table, stats bar, and mission history. |
-| ![Success](mission_dashboard_template_4.png) | **Success** | Full dashboard showing completed mission with End Time filled in. |
+### `js/ui-controller.js` (Renderer)
 
-**Additional panels (over the GameHat version):**
-- Summary stat cards (Total Moves, Distance, Duration, Missions Run, Success Rate, Robots Online)
-- Live Move Telemetry table (move #, robot, direction, X/Y position, goal status, timestamp)
-- Mission History sidebar (past missions with status badges)
-- Connection status footer (MongoDB + Redis)
+- Owns user interactions and DOM updates.
+- Renders mission cards, movement matrix, chrono-gauges, and telemetry panels.
+- Controls non-functional texture data (latency ticker, fluctuating resource HUD, coordinate stream, session fingerprint).
+- Uses a **requestAnimationFrame render loop** for coordinate stream painting to keep UI smooth during frequent updates.
+
+### `js/theme-engine.js` (State Manager)
+
+- Dedicated theme manager with localStorage persistence.
+- Applies theme through `data-theme` on `<html>`.
+- Exposes `initThemeEngine(selectElement)`.
+
+## Runtime Integration
+
+The FastAPI server now serves the entire `dashboard/` directory as static content at:
+
+- `/dashboard/` (loads `index.html`)
+- `/dashboard/css/main.css`
+- `/dashboard/js/*.js`
+
+## Data Source
+
+Primary mission source remains:
+
+- Redis hash: `mission:{session_id}:summary`
+
+Session list source:
+
+- `GET /sessions` filtered to IDs with `team4` prefix.
