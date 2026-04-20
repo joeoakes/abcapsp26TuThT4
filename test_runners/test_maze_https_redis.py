@@ -236,8 +236,14 @@ def _t715():
     subprocess.run(["redis-cli", "DEL", "mission:q15"], capture_output=True)
     for i in range(5):
         payload = f'"msg{i}"'
-        proc = subprocess.Popen(["redis-cli", "-x", "RPUSH", "mission:q15"],
-                                 stdin=subprocess.PIPE, capture_output=True)
+        # subprocess.Popen does not accept `capture_output=`; use explicit
+        # stdout/stderr pipes (that kwarg is only valid on subprocess.run).
+        proc = subprocess.Popen(
+            ["redis-cli", "-x", "RPUSH", "mission:q15"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
         proc.communicate(input=payload.encode())
     llen = subprocess.run(["redis-cli", "LLEN", "mission:q15"],
                           capture_output=True, text=True)
@@ -291,15 +297,23 @@ suite.run("7.21", "Smoke Testing", "Startup banner text present in source", _t72
 def _t722():
     r = subprocess.run(["redis-cli", "PING"], capture_output=True)
     if r.returncode != 0: raise AssertionError("Redis not running")
-    subprocess.run(["redis-cli", "DEL", "mission:stress22"])
+    subprocess.run(["redis-cli", "DEL", "mission:stress22"], capture_output=True)
     errors = []
     def worker(i):
         try:
+            # subprocess.Popen does not accept `capture_output=`; use explicit
+            # stdout/stderr pipes.  Also wait() for each child so we don't
+            # undercount when the parent thread exits before the client has
+            # finished its RPUSH round-trip.
             proc = subprocess.Popen(
                 ["redis-cli", "-x", "RPUSH", "mission:stress22"],
-                stdin=subprocess.PIPE, capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
-            proc.communicate(input=f'"payload_{i}"'.encode())
+            _, err = proc.communicate(input=f'"payload_{i}"'.encode(), timeout=10)
+            if proc.returncode != 0:
+                errors.append(f"rc={proc.returncode} err={err!r}")
         except Exception as e:
             errors.append(str(e))
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(50)]
@@ -307,8 +321,8 @@ def _t722():
     for t in threads: t.join()
     llen = subprocess.run(["redis-cli", "LLEN", "mission:stress22"],
                           capture_output=True, text=True)
-    subprocess.run(["redis-cli", "DEL", "mission:stress22"])
-    assert errors == []
+    subprocess.run(["redis-cli", "DEL", "mission:stress22"], capture_output=True)
+    assert errors == [], f"RPUSH workers reported errors: {errors[:3]}"
     assert int(llen.stdout.strip()) == 50
 suite.run("7.22", "Stress/Load Testing",
           "50 concurrent RPUSH calls – all entries stored", _t722)

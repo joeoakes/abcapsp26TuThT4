@@ -13,7 +13,8 @@ Examples:
     python test_runners/run_all_tests.py --suite redis
 
 Available suite names:
-    agent, server, redis, rag, sdl2, mongo, https_redis, telemetry, dashboard
+    agent, server, redis, rag, sdl2, mongo, https_redis, telemetry,
+    dashboard, tools
 """
 from __future__ import annotations
 
@@ -43,6 +44,7 @@ SUITES = [
     ("https_redis", "test_maze_https_redis.py",      "maze_https_redis.c"),
     ("telemetry",   "test_maze_https_telemetry.py",  "maze_https_telemetry.c"),
     ("dashboard",   "test_dashboard.py",             "dashboard.html"),
+    ("tools",       "test_tools_maze.py",            "tools_maze.py"),
 ]
 
 
@@ -73,7 +75,8 @@ def main():
     parser = argparse.ArgumentParser(description="Maze project master test runner")
     parser.add_argument(
         "--suite", metavar="NAME",
-        help="Run only the named suite (agent|server|redis|rag|sdl2|mongo|https_redis|telemetry|dashboard)"
+        help="Run only the named suite "
+             "(agent|server|redis|rag|sdl2|mongo|https_redis|telemetry|dashboard|tools)"
     )
     args = parser.parse_args()
 

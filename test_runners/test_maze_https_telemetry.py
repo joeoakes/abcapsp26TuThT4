@@ -144,7 +144,12 @@ suite.run("8.9", "Unit Testing", "handle_signal() – sets keep_running to 0", _
 def _t810():
     src = _find_source()
     if not src: return
-    assert "MHD_HTTP_OK" in src and '{"status":"ok"}' in src
+    # The JSON literal is written as a C escaped string: "{\"status\":\"ok\"}"
+    # so we normalise by collapsing backslashes before the substring check.
+    stripped = src.replace("\\", "")
+    assert "MHD_HTTP_OK" in src
+    assert '{"status":"ok"}' in stripped, \
+        'Response body {"status":"ok"} not found in source'
 suite.run("8.10", "Integration Testing", "POST /telemetry returns 200 ok (source check)", _t810)
 
 # 8.11

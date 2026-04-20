@@ -153,7 +153,11 @@ suite.run("2.12", "Integration Testing", "POST /solve from mid-path returns plan
 def _t213():
     r = _fresh_redis()
     _mredis.store_maze(r, "nopath", 2, 2, [15]*4, 0, 0, 1, 1)
-    with mock.patch.object(_ma, "solve_maze", return_value={"plan": [], "action": "NO_PATH"}):
+    # maze_server imports `solve_maze` directly, so the patch must target
+    # the name in maze_server's module namespace — patching maze_agent
+    # after the import has no effect on the already-bound local name.
+    with mock.patch.object(maze_server, "solve_maze",
+                           return_value={"plan": [], "action": "NO_PATH"}):
         try: solve_from_position("nopath"); assert False
         except HTTPException as e: assert e.status_code == 422
 suite.run("2.13", "Integration Testing", "POST /solve – no path returns 422", _t213)
@@ -161,36 +165,34 @@ suite.run("2.13", "Integration Testing", "POST /solve – no path returns 422", 
 # 2.14
 def _t214():
     import tempfile, pathlib
-    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
-        f.write("<html><body>Dashboard</body></html>"); tmp = pathlib.Path(f.name)
-    orig = maze_server.DASHBOARD_HTML
-    maze_server.DASHBOARD_HTML = tmp
+    tmp_dir = pathlib.Path(tempfile.mkdtemp())
+    (tmp_dir / "index.html").write_text("<html><body>Dashboard</body></html>")
+    orig = maze_server.DASHBOARD_DIR
+    maze_server.DASHBOARD_DIR = tmp_dir
     try:
         result = serve_dashboard()
+        # New implementation returns a RedirectResponse (307) to /dashboard/.
         assert result is not None
-    except ImportError:
-        # fastapi not installed — verify the file-exists check logic manually
-        assert tmp.exists()
+        status = getattr(result, "status_code", None)
+        assert status is None or status == 307
     finally:
-        maze_server.DASHBOARD_HTML = orig; tmp.unlink()
+        maze_server.DASHBOARD_DIR = orig
+        (tmp_dir / "index.html").unlink()
+        tmp_dir.rmdir()
 suite.run("2.14", "Integration Testing", "GET /dashboard – serves HTML when file exists", _t214)
 
 # 2.15
 def _t215():
     import pathlib
-    orig = maze_server.DASHBOARD_HTML
-    maze_server.DASHBOARD_HTML = pathlib.Path("/tmp/no_dash_here.html")
+    orig = maze_server.DASHBOARD_DIR
+    maze_server.DASHBOARD_DIR = pathlib.Path("/tmp/no_dash_dir_here_xyz")
     try:
         serve_dashboard()
         assert False, "Expected HTTPException"
     except HTTPException as e:
         assert e.status_code == 404
-    except ImportError:
-        # fastapi not installed — the missing file raises HTTPException before the import
-        # Manually verify file-missing logic
-        assert not maze_server.DASHBOARD_HTML.exists()
     finally:
-        maze_server.DASHBOARD_HTML = orig
+        maze_server.DASHBOARD_DIR = orig
 suite.run("2.15", "Integration Testing", "GET /dashboard – 404 when file missing", _t215)
 
 # 2.16
