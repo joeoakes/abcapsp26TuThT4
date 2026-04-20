@@ -4,9 +4,9 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from src.backend import maze_redis
-from src.backend.maze_server import app
-from src.backend.tools_maze import WALL_E, WALL_N, WALL_S, WALL_W
+import maze_redis
+from maze_server import app
+from tools_maze import WALL_E, WALL_N, WALL_S, WALL_W
 
 client = TestClient(app)
 TEST_PREFIX = "srv_test_" + uuid.uuid4().hex[:8]

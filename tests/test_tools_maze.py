@@ -1,6 +1,6 @@
 """Tests for tools_maze.py — verifies A*, legal_moves, and validate_plan."""
 
-from src.backend.tools_maze import (
+from tools_maze import (
     WALL_E, WALL_N, WALL_S, WALL_W,
     astar,
     legal_moves,

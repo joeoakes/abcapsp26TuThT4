@@ -4,7 +4,8 @@ import uuid
 
 import numpy as np
 
-from src.backend import maze_redis, rag_maze
+import maze_redis
+import rag_maze
 
 r = maze_redis.connect()
 TEST_PREFIX = "rag_test_" + uuid.uuid4().hex[:8]

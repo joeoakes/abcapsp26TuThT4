@@ -168,7 +168,7 @@ def current_position(r: _redis.Redis, session_id: str) -> Tuple[int, int]:
     Derive current (x, y) by replaying history from the start position.
     Returns start position if history is empty.
     """
-    from src.backend.tools_maze import DIRECTIONS
+    from tools_maze import DIRECTIONS
 
     maze = load_maze(r, session_id)
     if maze is None:

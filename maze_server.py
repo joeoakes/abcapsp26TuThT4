@@ -36,8 +36,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from src.backend import maze_redis
-from src.backend.maze_agent import solve_maze
+import maze_redis
+from maze_agent import solve_maze
 
 logger = logging.getLogger(__name__)
 

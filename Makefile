@@ -1,5 +1,5 @@
 PYTHON ?= python3
-BACKEND_MODULE := src.backend.maze_server
+BACKEND_MODULE := maze_server
 DASHBOARD_URL := https://127.0.0.1:8447/dashboard
 
 .PHONY: run backend dev test lint clean
@@ -10,7 +10,7 @@ run: ## Start backend with dashboard route
 backend: run ## Alias for run
 
 dev: ## Start backend in HTTP mode for quick local dev
-	uvicorn src.backend.maze_server:app --host 0.0.0.0 --port 8447
+	uvicorn maze_server:app --host 0.0.0.0 --port 8447
 
 test: ## Run Python test suite
 	pytest tests -q

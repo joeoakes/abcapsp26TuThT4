@@ -19,8 +19,9 @@ from typing import Any, List, Optional
 from langgraph.graph import END, StateGraph
 from typing_extensions import TypedDict
 
-from src.backend import maze_redis, rag_maze
-from src.backend.tools_maze import astar, validate_plan
+import maze_redis
+import rag_maze
+from tools_maze import astar, validate_plan
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ def executor(state: MazeState) -> dict:
         }
 
     move = plan[plan_index]
-    from src.backend.tools_maze import DIRECTIONS
+    from tools_maze import DIRECTIONS
     dx, dy = DIRECTIONS[move][0], DIRECTIONS[move][1]
     nx, ny = x + dx, y + dy
 
@@ -186,7 +187,7 @@ def planner(state: MazeState) -> dict:
 def _check_plan_reaches_goal(
     plan: List[str], sx: int, sy: int, gx: int, gy: int
 ) -> bool:
-    from src.backend.tools_maze import DIRECTIONS
+    from tools_maze import DIRECTIONS
     x, y = sx, sy
     for move in plan:
         dx, dy = DIRECTIONS[move][0], DIRECTIONS[move][1]

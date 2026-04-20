@@ -2,8 +2,8 @@
 
 import uuid
 
-from src.backend import maze_redis
-from src.backend.tools_maze import WALL_E, WALL_N, WALL_S, WALL_W
+import maze_redis
+from tools_maze import WALL_E, WALL_N, WALL_S, WALL_W
 
 TEST_PREFIX = "test_" + uuid.uuid4().hex[:8]
 

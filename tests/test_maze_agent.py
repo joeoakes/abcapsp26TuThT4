@@ -2,9 +2,9 @@
 
 import uuid
 
-from src.backend import maze_redis
-from src.backend.maze_agent import build_graph, executor, planner, solve_maze
-from src.backend.tools_maze import WALL_E, WALL_N, WALL_S, WALL_W
+import maze_redis
+from maze_agent import build_graph, executor, planner, solve_maze
+from tools_maze import WALL_E, WALL_N, WALL_S, WALL_W
 
 
 def _make_open_grid(w, h):
