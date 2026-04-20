@@ -116,17 +116,49 @@ Robots operate locally with real-time autonomy while securely logging mission te
 
 ## 🧪 Testing & Quality Assurance
 
-The project follows **industry-grade testing standards**:
+The project follows **industry-grade testing standards** and ships **11
+test suites** covering every major component:
 
-- Unit Testing
-- Integration Testing
-- System Testing
-- Regression Testing
+| # | Suite | Source under test |
+|---|---|---|
+| 1 | `test_maze_agent.py` | `maze_agent.py` (multi-agent A* planner) |
+| 2 | `test_maze_server.py` | `maze_server.py` (FastAPI + mTLS server) |
+| 3 | `test_maze_redis.py` | `maze_redis.py` (session storage) |
+| 4 | `test_rag_maze.py` | `rag_maze.py` (RAG pipeline, LLM summaries) |
+| 5 | `test_maze_sdl2.py` | `maze_sdl2_final_send.c` (game client) |
+| 6 | `test_maze_https_mongo.py` | `maze_https_mongo.c` (MongoDB log receiver) |
+| 7 | `test_maze_https_redis.py` | `maze_https_redis.c` (mission queue receiver) |
+| 8 | `test_maze_https_telemetry.py` | `maze_https_telemetry.c` (telemetry receiver) |
+| 9 | `test_dashboard.py` | `dashboard/` (HTML + ES-module UI) |
+| 10 | `test_tools_maze.py` | `tools_maze.py` (A* / legal-moves / plan validation) |
+| 11 | `test_mtls_regression.py` | **mTLS / security** — cert files, policy, handshake |
+
+All four testing levels are exercised:
+
+- **Unit Testing** — pure-function checks (e.g., `tools_maze.astar`, cert
+  modulus match)
+- **Integration Testing** — cross-module paths (FastAPI routes + Redis,
+  RAG pipeline + vector store, dashboard fetch → render)
+- **System Testing** — end-to-end flows (SDL2 client → HTTPS → Redis,
+  maze-solve → plan JSON)
+- **Regression Testing** — `test_mtls_regression.py` is a dedicated
+  Regression-level suite that locks in security invariants (ssl.CERT_REQUIRED
+  branch, MHD_USE_TLS flag, DEFAULT_PORT 8446, handshake behavior) so
+  refactors cannot silently weaken the security boundary
+
+**Run everything**
+
+```bash
+python test_runners/run_all_tests.py           # all 11 suites
+python test_runners/run_all_tests.py --suite mtls   # single suite
+```
 
 **Tooling**
-- Python testing frameworks
-- CI-ready structure
-- Full code coverage targets
+- Custom `TestSuite` framework (`test_runners/test_framework.py`)
+- `fakeredis` for in-memory Redis, `unittest.mock` for isolation
+- `openssl` + Python `ssl` stdlib for real TLS handshakes in the
+  mTLS regression suite (no external services required)
+- GitHub Actions CI (`.github/workflows/ci-tests.yml`)
 
 ---
 

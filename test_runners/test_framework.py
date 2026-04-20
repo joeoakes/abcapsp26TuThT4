@@ -23,6 +23,7 @@ TYPE_COLOURS = {
     "System Testing":      "\033[93m",   # yellow
     "Smoke Testing":       "\033[95m",   # magenta
     "Stress/Load Testing": "\033[91m",   # red
+    "Regression Testing":  "\033[97m",   # bright white
 }
 
 
