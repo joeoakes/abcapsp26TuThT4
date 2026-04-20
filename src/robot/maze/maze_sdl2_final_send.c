@@ -4,7 +4,7 @@
 //
 // Build (run from maze/):
 /*   
-gcc -O2 -Wall -Wextra -std=c11 maze_sdl2_final_send.c -o maze_sdl2_final_send \
+gcc -O2 -Wall -Wextra -std=c11 maze_sdl2_final_send.c -o maze_game \
        $(pkg-config --cflags --libs sdl2) -lcurl -lcjson -lhiredis -lpthread
 */
 // Requires: infra/security/certs/client.crt, infra/security/certs/client.key, infra/security/certs/ca.crt (mTLS)
