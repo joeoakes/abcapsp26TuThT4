@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 run_all_tests.py
-Master test runner — executes all 11 maze project test suites and prints
+Master test runner — executes all 12 maze project test suites and prints
 a consolidated summary.
 
 Usage:
@@ -14,7 +14,7 @@ Examples:
 
 Available suite names:
     agent, server, redis, rag, sdl2, mongo, https_redis, telemetry,
-    dashboard, tools, mtls
+    dashboard, tools, mtls, rl
 """
 from __future__ import annotations
 
@@ -46,6 +46,7 @@ SUITES = [
     ("dashboard",   "test_dashboard.py",             "dashboard.html"),
     ("tools",       "test_tools_maze.py",            "tools_maze.py"),
     ("mtls",        "test_mtls_regression.py",       "mTLS / security regression"),
+    ("rl",          "test_rl_maze.py",               "rl_maze.py"),
 ]
 
 
@@ -77,7 +78,7 @@ def main():
     parser.add_argument(
         "--suite", metavar="NAME",
         help="Run only the named suite "
-             "(agent|server|redis|rag|sdl2|mongo|https_redis|telemetry|dashboard|tools|mtls)"
+             "(agent|server|redis|rag|sdl2|mongo|https_redis|telemetry|dashboard|tools|mtls|rl)"
     )
     args = parser.parse_args()
 

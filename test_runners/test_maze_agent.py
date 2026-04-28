@@ -36,6 +36,9 @@ sys.modules["maze_redis"] = _mredis_mock
 
 _ragmock = mock.MagicMock()
 _ragmock.retrieve_rag_context = mock.MagicMock(return_value="")
+_ragmock.retrieve_similar_trajectories = mock.MagicMock(return_value=[])
+_ragmock.build_trajectory_context = mock.MagicMock(return_value="")
+_ragmock.store_successful_trajectory = mock.MagicMock()
 sys.modules["rag_maze"] = _ragmock
 
 # Import the real tools_maze from project_src
@@ -43,6 +46,7 @@ import tools_maze as _tools_real
 sys.modules["tools_maze"] = _tools_real
 
 import maze_agent
+maze_agent.RL_ENABLED = False
 
 executor                 = maze_agent.executor
 planner                  = maze_agent.planner

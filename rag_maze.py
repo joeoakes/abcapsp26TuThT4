@@ -13,7 +13,9 @@ Supports two backends:
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -25,6 +27,8 @@ VECTOR_DIM = 7
 INDEX_NAME = "mission_idx"
 MAX_DURATION = 600.0
 MAX_DISTANCE = 300.0
+TRAJECTORY_PREFIX = "trajectory:"
+TRAJECTORY_VEC_DIM = 6
 
 RESULT_MAP = {"success": 1.0, "in_progress": 0.5, "failed": 0.0, "aborted": 0.0}
 
@@ -329,3 +333,152 @@ def retrieve_rag_context(
     query_vec = mission_to_vector(current_summary)
     similar = search_similar_missions(r, query_vec, top_k=top_k)
     return build_rag_context(similar)
+
+
+# ── Trajectory memory (maze-structure aware) ─────────────────────────
+
+def _maze_structure_vector(width: int, height: int, cells: list) -> np.ndarray:
+    """
+    Convert a maze layout into a compact vector for trajectory retrieval.
+
+    Dimensions:
+      0) north wall density
+      1) east wall density
+      2) south wall density
+      3) west wall density
+      4) dead-end ratio (degree <= 1)
+      5) junction ratio (degree >= 3)
+    """
+    if width <= 0 or height <= 0 or not cells:
+        return np.zeros((TRAJECTORY_VEC_DIM,), dtype=np.float32)
+
+    total = float(width * height)
+    n = e = s = w = 0
+    dead = junction = 0
+
+    for y in range(height):
+        for x in range(width):
+            walls = int(cells[y * width + x]) & 0xF
+            n += 1 if walls & 1 else 0
+            e += 1 if walls & 2 else 0
+            s += 1 if walls & 4 else 0
+            w += 1 if walls & 8 else 0
+
+            degree = 4 - ((1 if walls & 1 else 0) + (1 if walls & 2 else 0) +
+                          (1 if walls & 4 else 0) + (1 if walls & 8 else 0))
+            if degree <= 1:
+                dead += 1
+            if degree >= 3:
+                junction += 1
+
+    vec = np.array([
+        n / total,
+        e / total,
+        s / total,
+        w / total,
+        dead / total,
+        junction / total,
+    ], dtype=np.float32)
+    return vec
+
+
+def store_successful_trajectory(
+    r: _redis.Redis,
+    maze_sig: str,
+    width: int,
+    height: int,
+    cells: list,
+    plan: List[str],
+    mission_result: str = "success",
+) -> Optional[str]:
+    """
+    Persist a successful plan keyed by maze signature and structural embedding.
+    """
+    if not plan:
+        return None
+
+    result_key = _normalize_mission_result(mission_result)
+    if result_key not in ("success", "in_progress"):
+        return None
+
+    vec = _maze_structure_vector(width, height, cells)
+    ts = int(time.time() * 1000)
+    key = f"{TRAJECTORY_PREFIX}{maze_sig}:{ts}"
+
+    r.hset(
+        key,
+        mapping={
+            "maze_sig": maze_sig,
+            "width": width,
+            "height": height,
+            "plan": json.dumps(plan),
+            "plan_len": len(plan),
+            "embedding": _vec_to_stored(vec),
+            "created_at_ms": ts,
+        },
+    )
+    return key
+
+
+def retrieve_similar_trajectories(
+    r: _redis.Redis,
+    maze_sig: str,
+    width: int,
+    height: int,
+    cells: list,
+    top_k: int = 3,
+    prefix_len: int = 8,
+) -> List[Tuple[float, List[str], str]]:
+    """
+    Returns [(similarity, plan_prefix, source_maze_sig), ...] sorted desc.
+    Exact maze_sig matches are prioritized and scored as 1.0.
+    """
+    if top_k <= 0:
+        return []
+
+    query_vec = _maze_structure_vector(width, height, cells)
+    scored: List[Tuple[float, List[str], str]] = []
+
+    for key in r.scan_iter(match=f"{TRAJECTORY_PREFIX}*"):
+        key_s = key if isinstance(key, str) else key.decode()
+        row = r.hgetall(key_s)
+        if not row:
+            continue
+
+        src_sig = row.get("maze_sig", "")
+        raw_plan = row.get("plan")
+        raw_embedding = row.get("embedding")
+        if not raw_plan or not raw_embedding:
+            continue
+
+        try:
+            plan = json.loads(raw_plan)
+        except Exception:
+            continue
+        if not isinstance(plan, list) or not plan:
+            continue
+
+        if src_sig == maze_sig:
+            sim = 1.0
+        else:
+            vec = _stored_to_vec(raw_embedding)
+            if len(vec) != TRAJECTORY_VEC_DIM:
+                continue
+            sim = cosine_similarity(query_vec, vec)
+
+        scored.append((float(sim), plan[:prefix_len], src_sig))
+
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return scored[:top_k]
+
+
+def build_trajectory_context(snippets: List[Tuple[float, List[str], str]]) -> str:
+    if not snippets:
+        return ""
+    lines = ["Retrieved successful trajectory snippets:"]
+    for i, (sim, prefix, sig) in enumerate(snippets, start=1):
+        lines.append(
+            f"  {i}. maze_sig={sig[:12]}..., similarity={sim:.3f}, "
+            f"prefix={json.dumps(prefix)}"
+        )
+    return "\n".join(lines)

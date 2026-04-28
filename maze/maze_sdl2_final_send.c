@@ -57,12 +57,12 @@ gcc -O2 -Wall -Wextra -std=c11 maze_sdl2_final_send.c -o maze_sdl2_final_send \
 #define CELL   32
 #define PAD    16
 
-/* HTTPS endpoints */
-#define LOGGING_ENDPOINT    "https://10.170.8.130:8446/telemetry"
-#define AI_ENDPOINT         "https://10.170.8.109:8446/mission"
-#define AI_MAZE_ENDPOINT    "https://10.170.8.109:8447/maze"
-#define AI_MISSION_WEB_API  "https://10.170.8.109:8447/mission"
-#define MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
+/* HTTPS endpoint defaults (all can be overridden via env vars in main()) */
+#define DEFAULT_LOGGING_ENDPOINT    "https://10.170.8.130:8446/telemetry"
+#define DEFAULT_AI_ENDPOINT         "https://10.170.8.109:8446/mission"
+#define DEFAULT_AI_MAZE_ENDPOINT    "https://10.170.8.109:8447/maze"
+#define DEFAULT_AI_MISSION_WEB_API  "https://10.170.8.109:8447/mission"
+#define DEFAULT_MINIPUPPER_ENDPOINT "https://10.170.8.123:8446/telemetry"
 enum { WALL_N = 1, WALL_E = 2, WALL_S = 4, WALL_W = 8 };
 
 typedef struct {
@@ -84,6 +84,13 @@ static time_t mission_start_time;
 static redisContext *redis_ctx = NULL;
 static bool mission_won = false;
 
+/* Runtime endpoints (env-overridable) */
+static const char *logging_endpoint;
+static const char *ai_mission_endpoint;
+static const char *ai_maze_endpoint;
+static const char *ai_mission_web_api;
+static const char *minipupper_endpoint;
+
 /* AI auto-play state */
 #define MAX_PLAN_MOVES 1024
 #define AUTOPLAY_DELAY_MS 150
@@ -92,6 +99,14 @@ static int    ai_plan_len   = 0;
 static int    ai_plan_index = 0;
 static bool   ai_autoplay   = false;
 static Uint32 ai_last_tick  = 0;
+
+static const char *default_title(void) {
+    return "SDL2 Maze - A=AI solve/pause, S=re-solve, R=regen, L=dashboard";
+}
+
+static void set_default_window_title(SDL_Window *win) {
+    SDL_SetWindowTitle(win, default_title());
+}
 
 /* -------------------------------------------------------
    HTTPS helper — fire-and-forget via background thread
@@ -200,8 +215,8 @@ static void send_json_telemetry(
     char *json_str = cJSON_PrintUnformatted(root);
     printf("\n--- JSON Payload ---\n%s\n", json_str);
 
-    https_post_async(LOGGING_ENDPOINT,    json_str, "Logging server");
-    https_post_async(MINIPUPPER_ENDPOINT, json_str, "MiniPupper");
+    https_post_async(logging_endpoint,    json_str, "Logging server");
+    https_post_async(minipupper_endpoint, json_str, "MiniPupper");
 
     free(json_str);
     cJSON_Delete(root);
@@ -222,7 +237,7 @@ static void send_mission_to_ai_server(void) {
 
     char *json_str = cJSON_PrintUnformatted(root);
 
-    https_post_async(AI_ENDPOINT, json_str, "AI server");
+    https_post_async(ai_mission_endpoint, json_str, "AI server");
 
     free(json_str);
     cJSON_Delete(root);
@@ -270,7 +285,7 @@ static void post_mission_summary_to_web(
 
     char *json_str = cJSON_PrintUnformatted(root);
     char url[384];
-    snprintf(url, sizeof(url), "%s/%s/summary", AI_MISSION_WEB_API, session_id);
+    snprintf(url, sizeof(url), "%s/%s/summary", ai_mission_web_api, session_id);
 
     printf("--- Sync mission summary to web API ---\n");
     fflush(stdout);
@@ -427,7 +442,7 @@ static void send_maze_grid(void) {
         struct curl_slist *headers = NULL;
         headers = curl_slist_append(headers, "Content-Type: application/json");
 
-        curl_easy_setopt(curl, CURLOPT_URL,            AI_MAZE_ENDPOINT);
+        curl_easy_setopt(curl, CURLOPT_URL,            ai_maze_endpoint);
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER,     headers);
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS,     json_str);
         curl_easy_setopt(curl, CURLOPT_SSLCERT,        mtls_client_cert);
@@ -474,8 +489,7 @@ static void replan_from_position(int px, int py) {
     char *json_str = cJSON_PrintUnformatted(root);
 
     char url[512];
-    snprintf(url, sizeof(url), "%s/%s/solve",
-             "https://10.170.8.109:8447/maze", session_id);
+    snprintf(url, sizeof(url), "%s/%s/solve", ai_maze_endpoint, session_id);
 
     printf("--- Re-planning from (%d, %d) ---\n", px, py);
     fflush(stdout);
@@ -730,7 +744,7 @@ static void regenerate(int *px, int *py, SDL_Window *win) {
   ai_plan_len   = 0;
   ai_plan_index = 0;
 
-  SDL_SetWindowTitle(win, "SDL2 Maze - A=AI solve, R=regen, L=dashboard");
+  set_default_window_title(win);
   send_json_telemetry("maze_reset", *px, *py, false);
   send_maze_grid();
 }
@@ -767,6 +781,18 @@ int main(void) {
         return 1;
     }
 
+    /* Endpoint overrides for local demo / alternate servers */
+    logging_endpoint    = getenv("LOGGING_ENDPOINT");
+    ai_mission_endpoint = getenv("AI_ENDPOINT");
+    ai_maze_endpoint    = getenv("AI_MAZE_ENDPOINT");
+    ai_mission_web_api  = getenv("AI_MISSION_WEB_API");
+    minipupper_endpoint = getenv("MINIPUPPER_ENDPOINT");
+    if (!logging_endpoint)    logging_endpoint    = DEFAULT_LOGGING_ENDPOINT;
+    if (!ai_mission_endpoint) ai_mission_endpoint = DEFAULT_AI_ENDPOINT;
+    if (!ai_maze_endpoint)    ai_maze_endpoint    = DEFAULT_AI_MAZE_ENDPOINT;
+    if (!ai_mission_web_api)  ai_mission_web_api  = DEFAULT_AI_MISSION_WEB_API;
+    if (!minipupper_endpoint) minipupper_endpoint = DEFAULT_MINIPUPPER_ENDPOINT;
+
     curl_global_init(CURL_GLOBAL_DEFAULT);
     redis_connect();
 
@@ -777,7 +803,7 @@ int main(void) {
     }
 
     SDL_Window *win = SDL_CreateWindow(
-        "SDL2 Maze - A=AI solve, R=regen, L=dashboard",
+        default_title(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         PAD * 2 + MAZE_W * CELL,
         PAD * 2 + MAZE_H * CELL,
@@ -831,8 +857,12 @@ int main(void) {
                 }
 
             if (e.key.keysym.sym == SDLK_r) {
-              if (move_sequence > 0 || mission_won)
+              /* Preserve SUCCESS missions: don't overwrite with "Aborted" on reset. */
+              if (mission_won) {
+                  /* Success summary was already recorded on goal. */
+              } else if (move_sequence > 0) {
                   flush_mission_summary(false, "user reset");
+              }
               won = false;
               mission_won = false;
               regenerate(&px, &py, win);
@@ -843,22 +873,52 @@ int main(void) {
                 launch_mission_dashboard();
             }
 
-            /* A key = toggle AI auto-play */
+            /* A key = solve/pause AI auto-play (auto re-plan from current position). */
             if (e.key.keysym.sym == SDLK_a && !won) {
-                if (ai_plan_len > 0 && ai_plan_index < ai_plan_len) {
-                    ai_autoplay = !ai_autoplay;
+                if (ai_autoplay) {
+                    ai_autoplay = false;
+                    set_default_window_title(win);
+                    printf("AI auto-play OFF\n");
+                    fflush(stdout);
+                } else if (ai_plan_len > 0 && ai_plan_index < ai_plan_len) {
+                    ai_autoplay = true;
                     ai_last_tick = SDL_GetTicks();
                     printf("AI auto-play %s (%d moves remaining)\n",
-                           ai_autoplay ? "ON" : "OFF",
+                           "ON",
                            ai_plan_len - ai_plan_index);
                     fflush(stdout);
                     SDL_SetWindowTitle(win, ai_autoplay
                         ? "AI solving... (A=pause)"
-                        : "SDL2 Maze - A=AI solve, R=regen, L=dashboard");
+                        : default_title());
                 } else {
-                    printf("No AI plan available (server unreachable?)\n");
-                    fflush(stdout);
+                    replan_from_position(px, py);
+                    if (ai_plan_len > 0 && ai_plan_index < ai_plan_len) {
+                        ai_autoplay = true;
+                        ai_last_tick = SDL_GetTicks();
+                        printf("AI auto-play ON (%d moves remaining)\n",
+                               ai_plan_len - ai_plan_index);
+                        fflush(stdout);
+                        SDL_SetWindowTitle(win, "AI solving... (A=pause)");
+                    } else {
+                        printf("No AI plan available (check AI_MAZE_ENDPOINT)\n");
+                        fflush(stdout);
+                    }
                 }
+            }
+
+            /* S key = force new solve from current position, then immediately auto-play. */
+            if (e.key.keysym.sym == SDLK_s && !won) {
+                replan_from_position(px, py);
+                if (ai_plan_len > 0 && ai_plan_index < ai_plan_len) {
+                    ai_autoplay = true;
+                    ai_last_tick = SDL_GetTicks();
+                    SDL_SetWindowTitle(win, "AI solving... (A=pause)");
+                    printf("AI solve requested from (%d,%d) [%d moves]\n",
+                           px, py, ai_plan_len - ai_plan_index);
+                } else {
+                    printf("AI solve request failed from (%d,%d)\n", px, py);
+                }
+                fflush(stdout);
             }
 
                 if (!won && !ai_autoplay && (
@@ -915,7 +975,7 @@ int main(void) {
                 }
                 if (ai_plan_index >= ai_plan_len && !won) {
                     ai_autoplay = false;
-                    SDL_SetWindowTitle(win, "AI plan done (not at goal). A=retry");
+                    SDL_SetWindowTitle(win, "AI plan done (not at goal). A=retry, S=re-solve");
                 }
             }
         }

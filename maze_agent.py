@@ -21,6 +21,7 @@ from typing_extensions import TypedDict
 
 import maze_redis
 import rag_maze
+import rl_maze
 from tools_maze import astar, validate_plan
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 LLM_ENABLED = bool(OLLAMA_BASE_URL)
+RL_ENABLED = os.getenv("RL_ENABLED", "1") != "0"
 
 
 # ── Shared state ─────────────────────────────────────────────────────
@@ -58,6 +60,7 @@ class MazeState(TypedDict, total=False):
 
     # Optional RAG context injected by planner
     rag_context: Optional[str]
+    trajectory_hints: Optional[List[List[str]]]
 
     # Session tracking
     session_id: str
@@ -134,7 +137,8 @@ def planner(state: MazeState) -> dict:
 
     chosen_plan = None
     reason = ""
-    rag_context = _fetch_rag_context(state)
+    trajectory_hints = _fetch_trajectory_hints(state)
+    rag_context = _fetch_rag_context(state, trajectory_hints)
 
     # ── Step 1: Try LLM ──────────────────────────────────────────────
     llm_state = {**state}
@@ -152,7 +156,20 @@ def planner(state: MazeState) -> dict:
             fail = msg if not ok else "does not reach goal"
             logger.info("Planner: LLM plan rejected (%s), falling back to A*", fail)
 
-    # ── Step 2: A* fallback ──────────────────────────────────────────
+    # ── Step 2: RL planner (A*-shaped tabular Q-learning) ───────────
+    if chosen_plan is None:
+        rl_plan = _try_rl_plan(state, trajectory_hints)
+        if rl_plan is not None:
+            ok, msg = validate_plan(rl_plan, width, height, cells, x, y)
+            if ok and _check_plan_reaches_goal(rl_plan, x, y, gx, gy):
+                chosen_plan = rl_plan
+                reason = f"RL plan accepted: {len(rl_plan)} moves"
+                logger.info("Planner: RL plan valid and reaches goal")
+            else:
+                fail = msg if not ok else "does not reach goal"
+                logger.info("Planner: RL plan rejected (%s), falling back to A*", fail)
+
+    # ── Step 3: A* fallback ──────────────────────────────────────────
     if chosen_plan is None:
         astar_plan = astar(width, height, cells, (x, y), (gx, gy))
         if astar_plan is not None:
@@ -181,6 +198,7 @@ def planner(state: MazeState) -> dict:
         "need_plan": False,
         "reason": reason,
         "rag_context": rag_context,
+        "trajectory_hints": trajectory_hints,
     }
 
 
@@ -249,8 +267,84 @@ def _try_llm_plan(state: MazeState) -> Optional[List[str]]:
     return None
 
 
-def _fetch_rag_context(state: MazeState) -> Optional[str]:
-    """Retrieve RAG context from Redis if a connection and maze_sig are available."""
+def _try_rl_plan(
+    state: MazeState,
+    trajectory_hints: Optional[List[List[str]]] = None,
+) -> Optional[List[str]]:
+    """
+    Train/use session-scoped tabular Q-values with A* reward shaping.
+    Returns a legal policy rollout or None when RL is disabled/unavailable.
+    """
+    if not RL_ENABLED:
+        return None
+
+    width = state["width"]
+    height = state["height"]
+    cells = state["cells"]
+    start = (state["x"], state["y"])
+    goal = (state["goal_x"], state["goal_y"])
+    session_id = state.get("session_id", "default")
+
+    planner = rl_maze.get_session_planner(session_id)
+    expert = planner.fit_with_astar(
+        width=width,
+        height=height,
+        cells=cells,
+        start=start,
+        goal=goal,
+        trajectory_hints=trajectory_hints or [],
+    )
+    if expert is None:
+        return None
+
+    rl_plan = planner.greedy_plan(
+        width=width,
+        height=height,
+        cells=cells,
+        start=start,
+        goal=goal,
+    )
+    return rl_plan if rl_plan is not None else expert
+
+
+def _fetch_trajectory_hints(state: MazeState) -> List[List[str]]:
+    """
+    Fetch successful trajectory prefixes from Redis by exact maze_sig or
+    structurally similar mazes.
+    """
+    r = state.get("redis")
+    if not r:
+        return []
+
+    sid = state.get("session_id", "")
+    maze_data = maze_redis.load_maze(r, sid)
+    if not maze_data:
+        return []
+
+    try:
+        snippets = rag_maze.retrieve_similar_trajectories(
+            r=r,
+            maze_sig=maze_data.get("maze_sig", ""),
+            width=int(maze_data["width"]),
+            height=int(maze_data["height"]),
+            cells=maze_data["cells"],
+            top_k=3,
+            prefix_len=8,
+        )
+        hints = [prefix for _sim, prefix, _sig in snippets if prefix]
+        if hints:
+            logger.info("Planner: fetched %d trajectory hints", len(hints))
+        return hints
+    except Exception as e:
+        logger.debug("Trajectory retrieval failed: %s", e)
+        return []
+
+
+def _fetch_rag_context(
+    state: MazeState,
+    trajectory_hints: Optional[List[List[str]]] = None,
+) -> Optional[str]:
+    """Retrieve mission and trajectory RAG context from Redis when available."""
     r = state.get("redis")
     if not r:
         return None
@@ -281,7 +375,17 @@ def _fetch_rag_context(state: MazeState) -> Optional[str]:
     }
 
     try:
-        ctx = rag_maze.retrieve_rag_context(r, current_summary, top_k=3)
+        mission_ctx = rag_maze.retrieve_rag_context(r, current_summary, top_k=3)
+        trajectory_ctx = ""
+        if trajectory_hints:
+            snippets = [
+                (1.0, hint, "cached_hint")
+                for hint in trajectory_hints
+            ]
+            trajectory_ctx = rag_maze.build_trajectory_context(snippets)
+
+        parts = [p for p in (mission_ctx, trajectory_ctx) if p]
+        ctx = "\n\n".join(parts)
         if ctx:
             logger.info("Planner: RAG context retrieved (%d chars)", len(ctx))
         return ctx or None
@@ -358,6 +462,7 @@ def solve_maze(
         "action": "",
         "reason": "",
         "rag_context": None,
+        "trajectory_hints": [],
         "session_id": session_id,
         "redis": redis_conn,
     }
@@ -374,4 +479,21 @@ def solve_maze(
         initial_state,
         config={"recursion_limit": 500},
     )
+
+    if redis_conn and final_state.get("action") == "DONE":
+        try:
+            maze_sig = initial_state.get("maze_sig") or maze_redis.maze_signature(cells)
+            history = maze_redis.get_history(redis_conn, session_id)
+            rag_maze.store_successful_trajectory(
+                r=redis_conn,
+                maze_sig=maze_sig,
+                width=width,
+                height=height,
+                cells=cells,
+                plan=history,
+                mission_result="success",
+            )
+        except Exception as e:
+            logger.debug("Failed to store successful trajectory: %s", e)
+
     return final_state

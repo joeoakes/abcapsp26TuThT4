@@ -45,6 +45,19 @@ def _summary(**kw):
     base.update(kw)
     return base
 
+
+def _open_maze(w, h):
+    cells = [15] * (w * h)
+    for y in range(h):
+        for x in range(w):
+            if x < w - 1:
+                cells[y * w + x] &= ~2
+                cells[y * w + x + 1] &= ~8
+            if y < h - 1:
+                cells[y * w + x] &= ~4
+                cells[(y + 1) * w + x] &= ~1
+    return cells
+
 # ---------------------------------------------------------------------------
 suite = TestSuite("rag_maze.py")
 
@@ -317,6 +330,72 @@ def _t425():
     assert elapsed < 2.0, f"10k cosine calls took {elapsed:.2f}s"
 suite.run("4.25", "Stress/Load Testing",
           "10,000 cosine_similarity() calls – throughput < 2s", _t425)
+
+
+# 4.26
+def _t426():
+    cells = _open_maze(4, 4)
+    vec = rag_maze._maze_structure_vector(4, 4, cells)
+    assert vec.shape == (rag_maze.TRAJECTORY_VEC_DIM,)
+    assert vec.dtype == np.float32
+
+
+suite.run("4.26", "Unit Testing",
+          "_maze_structure_vector() returns fixed-size embedding", _t426)
+
+
+# 4.27
+def _t427():
+    r = _make_redis()
+    cells = _open_maze(4, 4)
+    key = rag_maze.store_successful_trajectory(
+        r=r,
+        maze_sig="abc123",
+        width=4,
+        height=4,
+        cells=cells,
+        plan=["RIGHT", "DOWN", "RIGHT"],
+        mission_result="success",
+    )
+    assert key is not None
+    stored = r.hgetall(key)
+    assert stored.get("maze_sig") == "abc123"
+    assert "embedding" in stored and "plan" in stored
+
+
+suite.run("4.27", "Integration Testing",
+          "store_successful_trajectory() writes trajectory record", _t427)
+
+
+# 4.28
+def _t428():
+    r = _make_redis()
+    cells_a = _open_maze(4, 4)
+    cells_b = _open_maze(4, 4)
+    rag_maze.store_successful_trajectory(
+        r, "maze_a", 4, 4, cells_a, ["RIGHT", "RIGHT", "DOWN"], "success"
+    )
+    rag_maze.store_successful_trajectory(
+        r, "maze_b", 4, 4, cells_b, ["DOWN", "DOWN", "RIGHT"], "success"
+    )
+    snippets = rag_maze.retrieve_similar_trajectories(
+        r=r,
+        maze_sig="maze_a",
+        width=4,
+        height=4,
+        cells=cells_a,
+        top_k=2,
+        prefix_len=2,
+    )
+    assert len(snippets) >= 1
+    top = snippets[0]
+    assert top[2] == "maze_a"
+    assert top[0] >= 0.99
+    assert len(top[1]) == 2
+
+
+suite.run("4.28", "Integration Testing",
+          "retrieve_similar_trajectories() prioritizes exact maze_sig", _t428)
 
 # ---------------------------------------------------------------------------
 suite.print_summary()
